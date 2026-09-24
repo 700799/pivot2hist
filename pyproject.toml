@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pivot2hist"
+version = "0.1.0"
+description = "Auto-fitted pivot tables that toggle to histograms and back, with slicing. For cyber logs or any tabular data."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+keywords = ["pivot", "pivot-table", "histogram", "pandas", "cyber", "logs", "eda", "security"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Information Technology",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "Topic :: Security",
+]
+dependencies = [
+    "pandas>=1.5",
+    "numpy>=1.21",
+]
+
+[project.optional-dependencies]
+plot = ["matplotlib>=3.5"]
+parquet = ["pyarrow>=10"]
+dev = ["pytest>=7", "build"]
+
+[project.scripts]
+pivot2hist = "pivot2hist.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/700799/pivot2hist"
+Repository = "https://github.com/700799/pivot2hist"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
