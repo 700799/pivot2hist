@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import itertools
 import math
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
@@ -23,6 +23,7 @@ import pandas as pd
 from pandas.api import types as pdt
 
 from . import _binning as B
+from . import _semantic as S
 from ._profile import BOOLEAN, CATEGORICAL, CONSTANT, DATETIME, ID, NUMERIC, ColumnProfile, Profile, profile
 
 AGGS = ("sum", "mean", "count", "min", "max", "median", "nunique", "std")
@@ -59,6 +60,16 @@ class FitOptions:
         How many of the best-looking dimension candidates enter the combinatorial search.
     exclude:
         Column names never used as dimensions or measures.
+    pin:
+        Columns that must appear as a dimension (the fit decides where and how).
+    prefer_rows / prefer_cols:
+        Columns that get a bonus when placed on that axis.
+    weights:
+        Overrides for the scoring terms, see :data:`DEFAULT_WEIGHTS`
+        (e.g. ``{"layers": 1.5}`` to discourage stacking, ``{"aspect": 3}`` to insist on the ratio).
+    variants:
+        Also try semantic drill levels (``/24`` subnets, port classes, URL hosts ...) and
+        cyclic time buckets (hour of day, weekday) as alternative dimensions.
     max_categories / discrete_max / id_ratio:
         Profiling thresholds, see :func:`pivot2hist.profile`.
     """
@@ -75,6 +86,11 @@ class FitOptions:
     sample: int = 50_000
     search_width: int = 7
     exclude: Sequence[str] = ()
+    pin: Sequence[str] = ()
+    prefer_rows: Sequence[str] = ()
+    prefer_cols: Sequence[str] = ()
+    weights: Dict[str, float] = field(default_factory=dict)
+    variants: bool = True
     max_categories: int = 50
     discrete_max: int = 20
     id_ratio: float = 0.5
@@ -107,6 +123,8 @@ class Dim:
     integer: bool = False  # binned: integer-valued data
     freq: Optional[str] = None  # time
     top: Optional[int] = None  # categorical: top-N kept, rest -> "(other)"
+    level: Optional[str] = None  # categorical: semantic drill level ("/24", "class", "host" ...)
+    semantic: Optional[str] = None
     order: str = "auto"
     quality: float = 1.0  # profiling preference, feeds the score
     entity: bool = False  # names an entity (ip, host, user ...): reads best as a row
@@ -119,9 +137,17 @@ class Dim:
             return f"{self.column} (bins)"
         if self.kind == "time":
             return f"{self.column} ({B.freq_title(self.freq or '')})"
+        tags = []
+        if self.level is not None and self.semantic and self.level != S.levels_for(self.semantic)[-1]:
+            tags.append(self.level)
         if self.top is not None:
-            return f"{self.column} (top {self.top})"
-        return self.column
+            tags.append(f"top {self.top}")
+        return f"{self.column} ({', '.join(tags)})" if tags else self.column
+
+    @property
+    def is_coarse(self) -> bool:
+        """True when a semantic level coarser than the raw value is applied."""
+        return bool(self.level and self.semantic and self.level != S.levels_for(self.semantic)[-1])
 
     def to_dict(self) -> Dict[str, Any]:
         d: Dict[str, Any] = {"column": self.column, "kind": self.kind, "levels": self.levels, "label": self.label}
@@ -131,6 +157,8 @@ class Dim:
             d["freq"] = self.freq
         if self.top is not None:
             d["top"] = self.top
+        if self.level is not None:
+            d["level"] = self.level
         return d
 
 
@@ -197,6 +225,13 @@ def _prof_quality(cp: ColumnProfile) -> float:
     return max(0.0, base - cp.null_frac)
 
 
+def bucketed(series: pd.Series, cp: ColumnProfile, level: Optional[str]) -> pd.Series:
+    """``series`` mapped to a semantic drill level (identity for the finest level / no level)."""
+    if level is None or not cp.semantic or level == S.levels_for(cp.semantic)[-1]:
+        return series
+    return S.bucket(series, cp.semantic, level)
+
+
 def plan_dim(
     series: pd.Series,
     cp: ColumnProfile,
@@ -205,8 +240,18 @@ def plan_dim(
     *,
     bins: Optional[B.BinRule] = None,
     kind: Optional[str] = None,
+    level: Optional[str] = None,
+    freq: Optional[str] = None,
+    cache: Optional[Dict[Tuple, Any]] = None,
 ) -> Optional[Dim]:
-    """Plan how ``series`` becomes a dimension with at most ``budget`` levels."""
+    """Plan how ``series`` becomes a dimension with at most ``budget`` levels.
+
+    ``level`` picks a semantic drill level (``"/24"``, ``"class"`` ...); ``freq`` fixes a
+    time bucket (``"h"``, ``"D"``, ``"hour_of_day"``, ``"weekday"`` ...). ``cache`` (a dict)
+    memoises bucketed series and time-bucket counts across calls on the same series.
+    """
+    cache = cache if cache is not None else {}
+    sid = (id(series), len(series))
     budget = int(budget)
     if budget < 1 or cp.kind == CONSTANT and kind is None:
         return None
@@ -219,15 +264,33 @@ def plan_dim(
 
     meta = dict(quality=q, entity=cp.entity_hint, position=cp.position, natural=natural)
     if kind == "categorical":
+        if level is not None and cp.semantic:
+            ck = ("bucket", sid, level)
+            if ck not in cache:
+                b = bucketed(series, cp, level)
+                cache[ck] = (b, int(b.nunique()))
+            series, nunique = cache[ck]
+            natural = nunique + (1 if cp.null_frac > 0 else 0)
+            meta.update(natural=natural)
+            if level != S.levels_for(cp.semantic)[-1]:
+                meta["entity"] = False
+        sem = dict(level=level, semantic=cp.semantic) if level is not None else {}
         if natural <= budget:
-            return Dim(cp.name, "categorical", natural, order=options.order, **meta)
+            return Dim(cp.name, "categorical", natural, order=options.order, **sem, **meta)
         if budget < 2:
             return None
-        return Dim(cp.name, "categorical", budget, top=budget - 1, order=options.order, **meta)
+        return Dim(cp.name, "categorical", budget, top=budget - 1, order=options.order, **sem, **meta)
 
     if kind == "time":
-        freq = B.time_freq_for(series, budget)
-        n = B.time_bucket_count(series, freq) + (1 if cp.null_frac > 0 else 0)
+        def count(f: str) -> int:
+            ck = ("time", sid, f)
+            if ck not in cache:
+                cache[ck] = B.time_bucket_count(series, f)
+            return cache[ck]
+
+        if freq is None:
+            freq = next((f for f in B.TIME_FREQS if count(f) <= budget), B.TIME_FREQS[-1])
+        n = count(freq) + (1 if cp.null_frac > 0 else 0)
         if n > budget:
             return None
         return Dim(cp.name, "time", max(1, n), freq=freq, **meta)
@@ -255,6 +318,8 @@ def materialize(df: pd.DataFrame, dim: Dim) -> pd.Series:
         if not pdt.is_datetime64_any_dtype(s) and not isinstance(s.dtype, pd.PeriodDtype):
             s = pd.to_datetime(s, errors="coerce")
         return B.bucket_time(s, dim.freq or "D")
+    if dim.is_coarse:
+        s = S.bucket(s, dim.semantic or "", dim.level or "")
     return B.categorize(s, top=dim.top, order=dim.order)
 
 
@@ -273,13 +338,20 @@ def _measure_score(cp: ColumnProfile) -> float:
 
 
 def choose_measure(prof: Profile, exclude: Iterable[str] = ()) -> Tuple[Optional[str], str]:
-    """Best (values, agg) for the frame: sum of an additive-looking numeric column, else count."""
+    """Best (values, agg) for the frame.
+
+    Sum of an additive-looking numeric column (bytes, count, amount ...) when there is one;
+    for a regularly sampled time series with numeric readings, the mean of the best
+    reading; otherwise the row count.
+    """
     ex = set(exclude)
-    cands = [c for c in prof.measures if c.name not in ex and c.additive_hint and c.null_frac < 0.5]
-    if not cands:
-        return None, "sum"
-    best = max(cands, key=_measure_score)
-    return best.name, "sum"
+    numerics = [c for c in prof.measures if c.name not in ex and c.null_frac < 0.5]
+    additive = [c for c in numerics if c.additive_hint]
+    if additive:
+        return max(additive, key=_measure_score).name, "sum"
+    if prof.is_time_series and numerics:
+        return max(numerics, key=_measure_score).name, "mean"
+    return None, "sum"
 
 
 def default_agg(cp: Optional[ColumnProfile]) -> str:
@@ -291,20 +363,78 @@ def default_agg(cp: Optional[ColumnProfile]) -> str:
 # --------------------------------------------------------------------------- search
 
 
+@dataclass(frozen=True)
+class Cand:
+    """A candidate dimension: a column plus an optional semantic level or time bucket."""
+
+    cp: ColumnProfile
+    level: Optional[str] = None  # semantic drill level
+    freq: Optional[str] = None  # fixed time bucket (cyclic ones mostly)
+    natural: int = 0  # natural level count for this variant
+
+    @property
+    def column(self) -> str:
+        return self.cp.name
+
+    @property
+    def key(self) -> Tuple[str, Optional[str], Optional[str]]:
+        return (self.cp.name, self.level, self.freq)
+
+
+def _variants(cp: ColumnProfile, series: pd.Series, options: FitOptions, cache: Optional[Dict[Tuple, Any]] = None) -> List[Cand]:
+    """The ways a column can be a dimension: raw, plus drill levels / cyclic time buckets."""
+    cache = cache if cache is not None else {}
+    sid = (id(series), len(series))
+    out = [Cand(cp, natural=cp.natural_levels)]
+    if not options.variants:
+        return out
+    if cp.kind == DATETIME:
+        non_null = series.dropna()
+        if isinstance(non_null.dtype, pd.PeriodDtype):
+            non_null = non_null.dt.to_timestamp()
+        if len(non_null) >= 2:
+            span = non_null.max() - non_null.min()
+            for freq, min_span in (("hour_of_day", pd.Timedelta(hours=6)), ("weekday", pd.Timedelta(days=2))):
+                if span >= min_span:
+                    n = B.time_bucket_count(series, freq)
+                    cache[("time", sid, freq)] = n
+                    out.append(Cand(cp, freq=freq, natural=n))
+        return out
+    levels = cp.hierarchy
+    if cp.kind in (CATEGORICAL, ID) and levels:
+        coarser = []
+        for lvl in reversed(levels[:-1]):  # finest coarser level first
+            b = S.bucket(series, cp.semantic or "", lvl)
+            n = int(b.nunique())
+            cache[("bucket", sid, lvl)] = (b, n)
+            if 2 <= n < cp.nunique:
+                coarser.append(Cand(cp, level=lvl, natural=n + (1 if cp.null_frac > 0 else 0)))
+            if len(coarser) >= 2:
+                break
+        out.extend(coarser)
+    return out
+
+
 def _allocate(
-    dims: List[Tuple[ColumnProfile, pd.Series]], budget: int, options: FitOptions, *, slack: Optional[float] = None
+    dims: List[Tuple[Cand, pd.Series]],
+    budget: int,
+    options: FitOptions,
+    *,
+    slack: Optional[float] = None,
+    cache: Optional[Dict[Tuple, Any]] = None,
 ) -> Optional[List[Dim]]:
-    """Plan levels for an ordered list of dims so the product roughly fits ``budget``."""
+    """Plan levels for an ordered list of candidate dims so the product roughly fits ``budget``."""
     if not dims:
         return []
     naturals = []
-    for cp, s in dims:
+    for cand, s in dims:
+        cp = cand.cp
         if cp.kind == NUMERIC:
             naturals.append(min(cp.natural_levels, B.bin_count(s, options.bins), options.max_bins))
         elif cp.kind == DATETIME:
-            naturals.append(min(cp.natural_levels, budget))
+            naturals.append(min(cand.natural or cp.natural_levels, budget))
         else:
-            naturals.append(cp.natural_levels)
+            naturals.append(cand.natural or cp.natural_levels)
     if slack is None:
         slack = 1.5 if len(dims) > 1 else 1.0
     caps = list(naturals)
@@ -321,17 +451,18 @@ def _allocate(
             return None
         caps[i] = new_cap
     out: List[Dim] = []
-    for (cp, s), cap in zip(dims, caps):
-        d = plan_dim(s, cp, cap, options)
+    for (cand, s), cap in zip(dims, caps):
+        kind = "categorical" if cand.cp.kind == ID else None
+        d = plan_dim(s, cand.cp, cap, options, kind=kind, level=cand.level, freq=cand.freq, cache=cache)
         if d is None:
             return None
         out.append(d)
     return out
 
 
-def _order_for_axis(dims: List[Tuple[ColumnProfile, pd.Series]]) -> List[Tuple[ColumnProfile, pd.Series]]:
+def _order_for_axis(dims: List[Tuple[Cand, pd.Series]]) -> List[Tuple[Cand, pd.Series]]:
     """Outer level = fewest natural levels; time goes innermost among equals."""
-    return sorted(dims, key=lambda t: (t[0].natural_levels, t[0].kind == DATETIME))
+    return sorted(dims, key=lambda t: (t[0].natural, t[0].cp.kind == DATETIME))
 
 
 def _entropy(counts: np.ndarray) -> float:
@@ -346,14 +477,20 @@ class _Evaluator:
         self.sample = sample
         self.options = options
         self._codes: Dict[Tuple, np.ndarray] = {}
+        self._combos: Dict[Tuple, Tuple[np.ndarray, int, float]] = {}
 
     def _key(self, dim: Dim) -> Tuple:
-        return (dim.column, dim.kind, dim.top, dim.freq, dim.edges)
+        return (dim.column, dim.kind, dim.top, dim.freq, dim.edges, dim.level)
 
     def codes(self, dim: Dim) -> np.ndarray:
         k = self._key(dim)
         if k not in self._codes:
-            self._codes[k] = materialize(self.sample, dim).cat.codes.to_numpy()
+            cat = materialize(self.sample, dim)
+            codes = cat.cat.codes.to_numpy()
+            cats = list(cat.cat.categories)
+            other = float((codes == cats.index(B.OTHER)).mean()) if B.OTHER in cats else 0.0
+            self._codes[k] = codes
+            self._codes[("other",) + k] = np.array([other])
         return self._codes[k]
 
     def shape(self, rows: Sequence[Dim], cols: Sequence[Dim]) -> "Shape":
@@ -361,21 +498,29 @@ class _Evaluator:
         n = len(self.sample)
         if n == 0:
             return Shape(0, 0, 0, 0.0, 0.0, 0.0)
-        r_key = self._combo(rows)
-        c_key = self._combo(cols) if cols else np.zeros(n, dtype=np.int64)
-        n_rows = int(np.unique(r_key).size)
-        n_cols = int(np.unique(c_key).size) if cols else 1
-        _, counts = np.unique(r_key.astype(np.int64) * (int(c_key.max()) + 1) + c_key, return_counts=True)
-        h_rc = _entropy(counts)
-        mi = 0.0
+        r_key, n_rows, h_r = self._axis(rows)
         if cols:
-            h_r = _entropy(np.unique(r_key, return_counts=True)[1])
-            h_c = _entropy(np.unique(c_key, return_counts=True)[1])
+            c_key, n_cols, h_c = self._axis(cols)
+            _, counts = np.unique(r_key * (int(c_key.max()) + 1) + c_key, return_counts=True)
+            h_rc = _entropy(counts)
             # finite-sample bias correction (Miller-Madow) so big tables don't fake structure
             bias = (n_rows - 1) * (n_cols - 1) / (2.0 * n)
             mi = max(0.0, h_r + h_c - h_rc - bias)
+        else:
+            n_cols, h_rc, mi = 1, h_r, 0.0
+            counts = np.array([n_rows])
+            counts = np.unique(r_key, return_counts=True)[1]
         other = sum(self.other_frac(d) for d in list(rows) + list(cols))
         return Shape(n_rows, n_cols, int(counts.size), h_rc, mi, other)
+
+    def _axis(self, dims: Sequence[Dim]) -> Tuple[np.ndarray, int, float]:
+        """(combined key, distinct count, entropy) for one axis, cached per dims tuple."""
+        k = tuple(self._key(d) for d in dims)
+        if k not in self._combos:
+            key = self._combo(dims)
+            _, counts = np.unique(key, return_counts=True)
+            self._combos[k] = (key, int(counts.size), _entropy(counts))
+        return self._combos[k]
 
     def other_frac(self, dim: Dim) -> float:
         """Fraction of sample rows folded into the "(other)" bucket of a top-N dimension."""
@@ -383,14 +528,7 @@ class _Evaluator:
             return 0.0
         k = ("other",) + self._key(dim)
         if k not in self._codes:
-            cat = materialize(self.sample, dim)
-            cats = list(cat.cat.categories)
-            if B.OTHER in cats:
-                code = cats.index(B.OTHER)
-                frac = float((cat.cat.codes.to_numpy() == code).mean())
-            else:
-                frac = 0.0
-            self._codes[k] = np.array([frac])
+            self.codes(dim)
         return float(self._codes[k][0])
 
     def _combo(self, dims: Sequence[Dim]) -> np.ndarray:
@@ -417,46 +555,83 @@ class Shape:
         return 1.0 - self.cells / total if total else 1.0
 
 
-def score_layout(shape: Shape, rows: Sequence[Dim], cols: Sequence[Dim], options: FitOptions) -> float:
+#: Scoring terms and their default weights. Override any of them via ``FitOptions.weights``.
+DEFAULT_WEIGHTS: Dict[str, float] = {
+    "entropy": 1.0,  # cell entropy: many, evenly used cells
+    "mutual_info": 2.5,  # association between the row and column axes
+    "sparsity": 0.6,  # share of empty cells
+    "sparsity_excess": 8.0,  # sparsity beyond max_sparsity
+    "aspect": 0.35,  # |log(ratio / target)|; becomes 1.5 when aspect is set explicitly
+    "layers": 0.7,  # per extra stacked dimension
+    "quality": 0.5,  # per dimension, its profiling quality
+    "other": 1.2,  # mass folded into "(other)"
+    "has_cols": 0.4,  # a real 2-D table
+    "entity_rows": 0.5,  # entities (ips, hosts, users) down the side
+    "small_cols": 0.35,  # small categories across the top
+    "position": 0.05,  # per column position: earlier columns preferred
+    "prefer": 2.0,  # prefer_rows / prefer_cols honoured
+    "coarse": 0.3,  # semantic drill level applied (information loss vs top-N)
+    "time_rows": 0.4,  # time series: time down the side
+}
+
+
+def score_layout(
+    shape: Shape, rows: Sequence[Dim], cols: Sequence[Dim], options: FitOptions, *, time_series: bool = False
+) -> float:
     """Higher is better.
 
     Information is the entropy of how rows spread over cells (many, evenly used cells)
     plus the mutual information between the axes (tables that show structure); it is
     traded off against sparsity, distance from the target aspect ratio, extra layers,
-    low-quality dimensions and mass hidden in "(other)" buckets.
+    low-quality dimensions and mass hidden in "(other)" buckets. See
+    :data:`DEFAULT_WEIGHTS` for every term.
     """
     if shape.n_rows < 1 or shape.n_cols < 1 or shape.cells < 2:
         return -math.inf
     if shape.n_rows > options.max_rows or shape.n_cols > options.max_cols:
         return -math.inf
+    w = DEFAULT_WEIGHTS if not options.weights else {**DEFAULT_WEIGHTS, **options.weights}
     sparsity = shape.sparsity
-    score = shape.entropy + 2.5 * shape.mutual_info
-    score -= max(0.0, sparsity - options.max_sparsity) * 8.0
-    score -= sparsity * 0.6
+    score = w["entropy"] * shape.entropy + w["mutual_info"] * shape.mutual_info
+    score -= max(0.0, sparsity - options.max_sparsity) * w["sparsity_excess"]
+    score -= sparsity * w["sparsity"]
     ratio = shape.n_rows / shape.n_cols
-    aspect_w = 1.5 if options.aspect else 0.35  # an explicit target ratio is a request, not a hint
+    aspect_w = w["aspect"] if not options.aspect or "aspect" in options.weights else 1.5
     score -= aspect_w * abs(math.log(ratio / options.target_aspect))
-    score -= 0.7 * (len(rows) + len(cols) - 1)
-    score += 0.5 * sum(d.quality for d in rows) + 0.5 * sum(d.quality for d in cols)
-    score -= 1.2 * shape.other_frac
+    score -= w["layers"] * (len(rows) + len(cols) - 1)
+    score += w["quality"] * (sum(d.quality for d in rows) + sum(d.quality for d in cols))
+    score -= w["other"] * shape.other_frac
     if cols and shape.n_cols >= 2:
-        score += 0.4
+        score += w["has_cols"]
+    pr, pc = set(options.prefer_rows), set(options.prefer_cols)
     # Pivot-structure priors: entities down the side, small categories across the top,
     # and a weak preference for columns that come first in the source.
     for d in rows:
         if d.entity:
-            score += 0.5
+            score += w["entity_rows"]
         if d.natural and d.natural <= 4:
-            score -= 0.2
+            score -= 0.4 * w["entity_rows"]
+        if d.column in pr:
+            score += w["prefer"]
+        if d.column in pc:
+            score -= w["prefer"]
+        if time_series and d.kind == "time" and d.freq not in B.CYCLIC_FREQS:
+            score += w["time_rows"]
     for d in cols:
         if d.natural and d.natural <= 8:
-            score += 0.35
+            score += w["small_cols"]
         if d.entity and d.natural > 8:
-            score -= 0.3
+            score -= 0.85 * w["small_cols"]
+        if d.column in pc:
+            score += w["prefer"]
+        if d.column in pr:
+            score -= w["prefer"]
     for d in list(rows) + list(cols):
-        score -= 0.05 * d.position
+        score -= w["position"] * d.position
         if d.levels < 2:
             score -= 1.0
+        if d.is_coarse:
+            score -= w["coarse"]
     return score
 
 
@@ -475,11 +650,15 @@ def _resolve_spec(spec: DimSpec, df: pd.DataFrame, prof: Profile, budget: int, o
             return Dim(col, "binned", len(edges) - 1, edges=edges, integer=cp.is_integer, quality=_prof_quality(cp))
         if "freq" in spec:
             freq = spec.pop("freq")
-            return Dim(col, "time", B.time_bucket_count(df[col], freq), freq=freq, quality=_prof_quality(cp))
+            return Dim(col, "time", B.time_bucket_count(df[col], freq), freq=freq, quality=_prof_quality(cp),
+                       entity=cp.entity_hint, position=cp.position, natural=cp.natural_levels)
+        level = spec.pop("level", None)
         if "top" in spec:
             top = int(spec.pop("top"))
-            return Dim(col, "categorical", top + 1, top=top, order=options.order, quality=_prof_quality(cp))
-        d = plan_dim(df[col], cp, int(spec.pop("levels", budget)), options, bins=bins, kind=kind)
+            sem = dict(level=level, semantic=cp.semantic) if level is not None else {}
+            return Dim(col, "categorical", top + 1, top=top, order=options.order, quality=_prof_quality(cp),
+                       entity=cp.entity_hint, position=cp.position, natural=cp.natural_levels, **sem)
+        d = plan_dim(df[col], cp, int(spec.pop("levels", budget)), options, bins=bins, kind=kind, level=level)
         if d is None:
             raise ValueError(f"cannot use {col!r} as a dimension")
         return d
@@ -519,8 +698,8 @@ def _resolve_axis(specs: Optional[Sequence[DimSpec]], df, prof, budget, options)
         for _, col in plain:
             if col not in prof:
                 raise KeyError(f"unknown column {col!r}")
-        pairs = [(prof[col], df[col]) for _, col in plain]
-        if any(cp.kind in (CONSTANT, ID) for cp, _ in pairs):
+        pairs = [(Cand(prof[col], natural=prof[col].natural_levels), df[col]) for _, col in plain]
+        if any(c.cp.kind == CONSTANT for c, _ in pairs):
             planned = None
         else:
             planned = _allocate(pairs, remaining, options, slack=1.0)
@@ -593,54 +772,91 @@ def fit_layout(
         used.add(values)
     for d in (fixed_rows or []) + (fixed_cols or []):
         used.add(d.column)
-    cands = [
+    pinned = [c for c in options.pin if c in prof and c not in used]
+    for c in pinned:
+        if prof[c].kind == CONSTANT:
+            raise ValueError(f"pinned column {c!r} is constant")
+    eligible = [
         c
         for c in prof
         if c.name not in used and c.kind in (CATEGORICAL, BOOLEAN, DATETIME, NUMERIC, ID) and c.nunique >= 2
     ]
-    cands.sort(key=lambda c: (-_prof_quality(c), -min(c.nunique, 500)))
-    cands = cands[: max(1, options.search_width)]
+    eligible.sort(key=lambda c: (-_prof_quality(c), -min(c.nunique, 500)))
+    # Pinned, preferred and the time column always make the pool; the rest fill by quality.
+    must = set(pinned) | set(options.prefer_rows) | set(options.prefer_cols)
+    if prof.time_column and prof.time_column not in used:
+        must.add(prof.time_column)
+    cols_pool = [c for c in eligible if c.name in must]
+    for c in eligible:
+        if len(cols_pool) >= max(1, options.search_width):
+            break
+        if c.name not in must:
+            cols_pool.append(c)
 
     n = len(df)
     sample = df if n <= options.sample else df.sample(options.sample, random_state=options.seed)
     ev = _Evaluator(sample, options)
-    series = {c.name: sample[c.name] for c in cands}
+    series = {c.name: sample[c.name] for c in cols_pool}
+    cache: Dict[Tuple, Any] = {}
+    cands: List[Cand] = []
+    for c in cols_pool:
+        cands.extend(_variants(c, series[c.name], options, cache))
+    time_series = prof.is_time_series
+    pin_set = set(pinned)
 
-    def combos(pool: List[ColumnProfile], min_k: int, max_k: int):
+    def combos(pool: List[Cand], min_k: int, max_k: int):
         for k in range(min_k, max_k + 1):
             for combo in itertools.combinations(pool, k):
-                yield list(combo)
+                if len({c.column for c in combo}) == k:  # one variant per column
+                    yield list(combo)
+
+    def score(r_dims: List[Dim], c_dims: List[Dim]) -> float:
+        if pin_set and not pin_set <= {d.column for d in r_dims + c_dims}:
+            return -math.inf
+        return score_layout(ev.shape(r_dims, c_dims), r_dims, c_dims, options, time_series=time_series)
 
     best: Optional[Tuple[float, Layout]] = None
     max_layers = max(1, options.layers)
 
-    row_choices: List[Optional[List[Dim]]]
+    row_choices: List[List[Dim]]
     if fixed_rows is not None:
         row_choices = [fixed_rows]
     else:
-        row_choices = []
+        scored_rows: List[Tuple[float, List[Dim]]] = []
         for combo in combos(cands, 1, max_layers):
-            dims = _order_for_axis([(c, series[c.name]) for c in combo])
-            planned = _allocate(dims, options.max_rows, options)
+            dims = _order_for_axis([(c, series[c.column]) for c in combo])
+            planned = _allocate(dims, options.max_rows, options, cache=cache)
             if planned:
-                row_choices.append(planned)
+                # rank row choices alone; only the best few get the full column search
+                sc = score_layout(ev.shape(planned, []), planned, [], options, time_series=time_series)
+                scored_rows.append((sc, planned))
+        scored_rows.sort(key=lambda t: -t[0])
+        keep = max(6, 2 * options.search_width)
+        row_choices = [p for _, p in scored_rows[:keep]]
+        # pinned columns must get a chance on the row axis even if they scored low alone
+        for sc, p in scored_rows[keep:]:
+            if pin_set and pin_set & {d.column for d in p}:
+                row_choices.append(p)
 
+    col_cache: Dict[Tuple[str, ...], List[List[Dim]]] = {}
     for r_dims in row_choices:
-        if r_dims is None:
-            continue
         r_cols = {d.column for d in r_dims}
         if fixed_cols is not None:
             col_choices: List[List[Dim]] = [fixed_cols]
         else:
-            col_choices = [[]]
-            pool = [c for c in cands if c.name not in r_cols]
-            for combo in combos(pool, 1, max_layers):
-                dims = _order_for_axis([(c, series[c.name]) for c in combo])
-                planned = _allocate(dims, options.max_cols, options)
-                if planned:
-                    col_choices.append(planned)
+            ck = tuple(sorted(r_cols))
+            if ck not in col_cache:
+                choices: List[List[Dim]] = [[]]
+                pool = [c for c in cands if c.column not in r_cols]
+                for combo in combos(pool, 1, max_layers):
+                    dims = _order_for_axis([(c, series[c.column]) for c in combo])
+                    planned = _allocate(dims, options.max_cols, options, cache=cache)
+                    if planned:
+                        choices.append(planned)
+                col_cache[ck] = choices
+            col_choices = col_cache[ck]
         for c_dims in col_choices:
-            sc = score_layout(ev.shape(r_dims, c_dims), r_dims, c_dims, options)
+            sc = score(list(r_dims), list(c_dims))
             if sc == -math.inf:
                 continue
             if ranked is not None:
@@ -654,14 +870,38 @@ def fit_layout(
         # Nothing scored: fall back to the single best-quality candidate, or a constant.
         if fixed_rows is not None:
             return Layout(tuple(fixed_rows), tuple(fixed_cols or ()), values, agg)
-        for c in cands:
-            d = plan_dim(series[c.name], c, options.max_rows, options)
+        for c in cols_pool:
+            d = plan_dim(series[c.name], c, options.max_rows, options, kind="categorical" if c.kind == ID else None)
             if d is not None:
                 return Layout((d,), tuple(fixed_cols or ()), values, agg)
         first = str(df.columns[0])
         d = Dim(first, "categorical", max(1, prof[first].natural_levels), order=options.order)
         return Layout((d,), tuple(fixed_cols or ()), values, agg)
     return best[1]
+
+
+def suggest_layouts(
+    df: pd.DataFrame,
+    options: Optional[FitOptions] = None,
+    n: int = 5,
+    *,
+    prof: Optional[Profile] = None,
+    **fixed: Any,
+) -> List[Tuple[float, Layout]]:
+    """The ``n`` best distinct layouts, best first (the "auto-guess" menu)."""
+    ranked: List[Tuple[float, Layout]] = []
+    fit_layout(df, options, prof=prof, ranked=ranked, **fixed)
+    out: List[Tuple[float, Layout]] = []
+    seen = set()
+    for sc, lay in ranked:
+        key = lay.describe()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append((sc, lay))
+        if len(out) >= n:
+            break
+    return out
 
 
 # --------------------------------------------------------------------------- tables

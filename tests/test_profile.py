@@ -53,3 +53,20 @@ def test_high_cardinality_but_repetitive_is_categorical():
     prof = p2h.profile(pd.DataFrame({"src_ip": vals}))
     assert prof["src_ip"].kind == CATEGORICAL
     assert prof["src_ip"].entity_hint
+
+
+def test_semantic_and_time_series_fields(fw):
+    prof = p2h.profile(fw)
+    assert prof["src_ip"].semantic == "ipv4" and prof["src_ip"].hierarchy == ("/8", "/16", "/24", "host")
+    assert prof["dst_port"].semantic == "port" and prof["dst_port"].hierarchy == ("class", "port")
+    assert prof["action"].semantic is None and prof["action"].hierarchy == ()
+    assert prof["src_ip"].entity_hint
+    assert prof.time_column == "timestamp" and not prof.is_time_series
+    assert prof["timestamp"].ts_freq is not None
+    assert "semantic" in prof.summary().columns
+    ts = pd.DataFrame({"t": pd.date_range("2026-01-01", periods=300, freq="5min"), "v": np.arange(300.0)})
+    pt = p2h.profile(ts)
+    assert pt.is_time_series and pt["t"].ts_freq == "5min" and pt["t"].ts_regularity == 1.0 and pt["t"].ts_sorted
+    irregular = pd.DataFrame({"t": [pd.Timestamp(x) for x in ("2026-01-01", "2026-01-01 00:00:07", "2026-01-03", "2026-02-01")], "v": [1, 2, 3, 4]})
+    assert not p2h.profile(irregular).is_time_series
+    assert p2h.profile(pd.DataFrame({"x": [1, 2]})).time_column is None

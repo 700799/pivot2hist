@@ -21,6 +21,8 @@ import numpy as np
 import pandas as pd
 from pandas.api import types as pdt
 
+from ._semantic import infer_semantic, levels_for
+
 NUMERIC = "numeric"
 CATEGORICAL = "categorical"
 BOOLEAN = "boolean"
@@ -74,6 +76,20 @@ class ColumnProfile:
     examples: Tuple[str, ...]
     entity_hint: bool = False
     position: int = 0  # column index in the source frame (earlier columns are weakly preferred)
+    semantic: Optional[str] = None  # ipv4, port, url, email, domain, path, uuid, hash, mac, ipv6
+    ts_freq: Optional[str] = None  # datetime: inferred sampling interval ("1min", "1h", "1D" ...)
+    ts_regularity: float = 0.0  # datetime: share of gaps within 10% of the typical gap
+    ts_sorted: bool = False  # datetime: values are non-decreasing in frame order
+
+    @property
+    def hierarchy(self) -> Tuple[str, ...]:
+        """Drill levels (coarse -> fine) unlocked by the semantic type, if any."""
+        return levels_for(self.semantic)
+
+    @property
+    def is_time_series(self) -> bool:
+        """A datetime column sampled at a mostly regular interval."""
+        return self.kind == DATETIME and self.ts_regularity >= 0.8
 
     @property
     def unique_ratio(self) -> float:
@@ -128,21 +144,39 @@ class Profile:
     def measures(self) -> List[ColumnProfile]:
         return self.by_kind(NUMERIC)
 
+    @property
+    def time_column(self) -> Optional[str]:
+        """The best timestamp column: datetime kind, fewest nulls, name hint breaks ties."""
+        cands = self.by_kind(DATETIME)
+        if not cands:
+            return None
+        return max(cands, key=lambda c: (-c.null_frac, c.time_hint, c.ts_regularity, -c.position)).name
+
+    @property
+    def is_time_series(self) -> bool:
+        """True when the frame has a regularly sampled timestamp column."""
+        t = self.time_column
+        return bool(t) and self.columns[t].is_time_series
+
     def summary(self) -> pd.DataFrame:
-        """One row per column: kind, dtype, cardinality, nulls, examples."""
+        """One row per column: kind, semantic type, dtype, cardinality, nulls, examples."""
         rows = []
         for c in self.columns.values():
+            extra = c.semantic or ""
+            if c.kind == DATETIME and c.ts_freq:
+                extra = f"every {c.ts_freq}" if c.is_time_series else f"~{c.ts_freq}"
             rows.append(
                 {
                     "column": c.name,
                     "kind": c.kind,
+                    "semantic": extra,
                     "dtype": c.dtype,
                     "nunique": c.nunique,
                     "null_frac": round(c.null_frac, 4),
                     "examples": ", ".join(c.examples),
                 }
             )
-        return pd.DataFrame(rows, columns=["column", "kind", "dtype", "nunique", "null_frac", "examples"])
+        return pd.DataFrame(rows, columns=["column", "kind", "semantic", "dtype", "nunique", "null_frac", "examples"])
 
     def __repr__(self) -> str:  # pragma: no cover - cosmetic
         return f"<Profile {self.n_rows:,} rows x {len(self)} columns>\n" + self.summary().to_string(index=False)
@@ -165,6 +199,32 @@ def _nunique(non_null: pd.Series) -> int:
         return int(non_null.nunique())
     except TypeError:
         return int(non_null.astype(str).nunique())
+
+
+def _time_series_stats(s: pd.Series) -> Tuple[Optional[str], float, bool]:
+    """(typical gap as an offset alias, regularity in [0,1], sorted?) for a datetime column."""
+    v = s.dropna()
+    if len(v) < 3:
+        return None, 0.0, bool(len(v) <= 1 or v.is_monotonic_increasing)
+    if isinstance(v.dtype, pd.PeriodDtype):
+        v = v.dt.to_timestamp()
+    sorted_in_frame = bool(v.is_monotonic_increasing)
+    vals = np.sort(v.to_numpy(dtype="datetime64[ns]").astype("int64"))
+    gaps = np.diff(vals)
+    gaps = gaps[gaps > 0]
+    if gaps.size == 0:
+        return None, 0.0, sorted_in_frame
+    typical = float(np.median(gaps))
+    regularity = float(np.mean(np.abs(gaps - typical) <= 0.1 * typical))
+    secs = typical / 1e9
+    for size, unit in ((86400 * 365, "Y"), (86400 * 28, "M"), (86400 * 7, "W"), (86400, "D"), (3600, "h"), (60, "min"), (1, "s")):
+        if secs >= size * 0.98:
+            n = secs / size
+            alias = f"{n:.0f}{unit}" if abs(n - round(n)) < 0.05 else f"{n:.2g}{unit}"
+            break
+    else:
+        alias = f"{secs * 1000:.3g}ms"
+    return alias, regularity, sorted_in_frame
 
 
 def profile_column(
@@ -229,6 +289,13 @@ def profile_column(
         else:
             kind = CATEGORICAL  # high cardinality but repetitive: usable with top-N bucketing
 
+    semantic = None
+    if kind in (CATEGORICAL, ID) and nunique >= 2:
+        semantic = infer_semantic(non_null, name=name)
+    ts_freq, ts_reg, ts_sorted = (None, 0.0, False)
+    if kind == DATETIME:
+        ts_freq, ts_reg, ts_sorted = _time_series_stats(s)
+
     return ColumnProfile(
         name=name,
         kind=kind,
@@ -242,8 +309,12 @@ def profile_column(
         id_hint=id_hint,
         time_hint=time_hint,
         examples=_examples(non_null),
-        entity_hint=bool(_ENTITY_HINTS.search(name)),
+        entity_hint=bool(_ENTITY_HINTS.search(name)) or semantic in ("ipv4", "ipv6", "email", "url", "domain", "mac"),
         position=int(position),
+        semantic=semantic,
+        ts_freq=ts_freq,
+        ts_regularity=ts_reg,
+        ts_sorted=ts_sorted,
     )
 
 

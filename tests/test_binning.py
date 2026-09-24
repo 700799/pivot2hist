@@ -113,3 +113,35 @@ def test_categorize_top_n_and_order():
     assert list(nat.cat.categories) == ["a", "b"]
     boo = B.categorize(pd.Series([True, False, True]))
     assert list(boo.cat.categories) == [False, True]
+
+
+def test_natural_breaks_and_quantile_rules():
+    rng = np.random.default_rng(0)
+    bi = np.concatenate([rng.normal(10, 1, 500), rng.normal(50, 2, 300), rng.normal(200, 10, 200)])
+    e = B.bin_edges(bi, "kmeans", max_bins=3)
+    assert len(e) == 4 and 15 < e[1] < 45 and 60 < e[2] < 190
+    q = B.bin_edges(bi, "quantile", max_bins=4)
+    counts = np.histogram(bi, q)[0]
+    assert len(q) == 5 and counts.min() > 150
+    ints = rng.integers(0, 100, 1000)
+    assert np.all(np.mod(B.bin_edges(ints, "kmeans", max_bins=4), 1) == 0)
+    assert len(B.bin_edges(np.array([1.0, 2.0]), "kmeans", max_bins=5)) >= 2
+    assert B.bin_count(bi, "kmeans") == B.bin_count(bi, "auto")
+
+
+def test_kde_integrates_to_one():
+    v = np.random.default_rng(0).normal(size=2000)
+    x, d = B.kde(v, points=400)
+    assert abs(np.trapezoid(d, x) - 1) < 0.05 if hasattr(np, "trapezoid") else abs(np.trapz(d, x) - 1) < 0.05
+    lx, ld = B.kde(np.exp(v), log=True)
+    assert lx.min() > 0 and ld.max() > 0
+    assert B.kde(np.array([]))[0].size == 0
+
+
+def test_cyclic_time_buckets():
+    ts = pd.Series(pd.date_range("2026-01-01", periods=500, freq="3h"))
+    hod = B.bucket_time(ts, "hour_of_day")
+    assert list(hod.cat.categories[:3]) == ["00h", "03h", "06h"]
+    assert list(B.bucket_time(ts, "weekday").cat.categories) == ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    assert list(B.bucket_time(ts, "month_of_year").cat.categories) == ["Jan", "Feb", "Mar"]
+    assert B.freq_title("hour_of_day") == "hour of day"

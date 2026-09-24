@@ -20,7 +20,8 @@ OTHER = "(other)"
 NULL = "(null)"
 
 BinRule = Union[str, int]
-RULES = ("auto", "fd", "sturges", "scott", "sqrt", "rice")
+RULES = ("auto", "fd", "sturges", "scott", "sqrt", "rice", "kmeans", "quantile")
+_COUNT_RULES = ("auto", "fd", "sturges", "scott", "sqrt", "rice")
 
 _NICE_FLOAT = (1.0, 2.0, 2.5, 5.0, 10.0)
 _NICE_INT = (1.0, 2.0, 5.0, 10.0)
@@ -46,6 +47,8 @@ def bin_count(values, rule: BinRule = "auto") -> int:
     """
     if isinstance(rule, (int, np.integer)) and not isinstance(rule, bool):
         return max(1, int(rule))
+    if rule in ("kmeans", "quantile"):
+        rule = "auto"  # placement rules use the auto count
     v = _clean(values)
     n = v.size
     if n < 2:
@@ -198,6 +201,10 @@ def bin_edges(
     if max_bins is not None:
         n = min(n, int(max_bins))
     n = max(1, n)
+    if rule == "quantile":
+        return quantile_edges(v, n, integer=integer)
+    if rule == "kmeans":
+        return natural_breaks(v, n, integer=integer)
     if should_log(v, scale):
         pos = v[v > 0]
         has_zero = pos.size < v.size
@@ -208,6 +215,101 @@ def bin_edges(
             edges = np.append(edges, edges[-1] * 10)
         return edges
     return linear_edges(lo, hi, n, integer=integer)
+
+
+def _round_sig(x: np.ndarray, sig: int = 3) -> np.ndarray:
+    """Round each value to ``sig`` significant digits (vectorised)."""
+    out = np.asarray(x, dtype=float).copy()
+    nz = out != 0
+    mag = np.floor(np.log10(np.abs(out[nz])))
+    scale = 10.0 ** (sig - 1 - mag)
+    out[nz] = np.round(out[nz] * scale) / scale
+    return out
+
+
+def _dedupe_edges(edges: np.ndarray, lo: float, hi: float, integer: bool) -> np.ndarray:
+    e = np.unique(np.round(edges, 0) if integer else edges)
+    if e.size < 2:
+        return linear_edges(lo, hi, 1, integer=integer)
+    e[0] = min(e[0], lo)
+    if integer:
+        e[-1] = max(e[-1], hi + 1)
+    else:
+        e[-1] = max(e[-1], hi)
+    return e
+
+
+def quantile_edges(values, n_bins: int, *, integer: bool = False) -> np.ndarray:
+    """Equal-frequency bins: each bin holds about the same number of values."""
+    v = _clean(values)
+    if v.size == 0:
+        return np.array([0.0, 1.0])
+    n_bins = max(1, int(n_bins))
+    q = np.percentile(v, np.linspace(0, 100, n_bins + 1))
+    q = _round_sig(q) if not integer else np.round(q)
+    return _dedupe_edges(q, float(v.min()), float(v.max()), integer)
+
+
+def natural_breaks(values, n_bins: int, *, integer: bool = False, seed: int = 0) -> np.ndarray:
+    """Density-driven bins (1-D k-means, a.k.a. Jenks-style natural breaks).
+
+    Cut points fall in the gaps between clusters of values, so multi-modal data gets one
+    bin per mode instead of arbitrary equal widths.
+    """
+    from ._cluster import kmeans
+
+    v = _clean(values)
+    if v.size == 0:
+        return np.array([0.0, 1.0])
+    n_bins = max(1, int(n_bins))
+    uniq = np.unique(v)
+    if uniq.size <= n_bins:
+        edges = np.concatenate([uniq, [uniq[-1] + (1.0 if integer else 0.0)]])
+        return _dedupe_edges(edges, float(v.min()), float(v.max()), integer)
+    sample = v if v.size <= 20000 else np.random.default_rng(seed).choice(v, 20000, replace=False)
+    x = np.log1p(sample) if sample.min() >= 0 and should_log(sample, "auto") else sample
+    labels, centers, _ = kmeans(x.reshape(-1, 1), n_bins, n_init=2, seed=seed)
+    order = np.argsort(centers[:, 0])
+    cuts = []
+    for a, b in zip(order[:-1], order[1:]):
+        hi_a = x[labels == a].max()
+        lo_b = x[labels == b].min()
+        cuts.append((hi_a + lo_b) / 2.0)
+    cuts = np.array(cuts)
+    if x is not sample:
+        cuts = np.expm1(cuts)
+    edges = np.concatenate([[v.min()], cuts, [v.max()]])
+    edges = np.round(edges) if integer else _round_sig(edges)
+    return _dedupe_edges(edges, float(v.min()), float(v.max()), integer)
+
+
+def kde(values, grid: Optional[np.ndarray] = None, *, points: int = 128, sample: int = 5000, log: bool = False, seed: int = 0) -> Tuple[np.ndarray, np.ndarray]:
+    """Gaussian kernel density estimate (Scott's bandwidth) on a sample. Returns ``(x, density)``.
+
+    With ``log=True`` the estimate is done in log10 space (for heavy-tailed data) and the
+    returned x values are on the original scale.
+    """
+    v = _clean(values)
+    if v.size == 0:
+        return np.array([]), np.array([])
+    if v.size > sample:
+        v = np.random.default_rng(seed).choice(v, sample, replace=False)
+    if log:
+        v = np.log10(v[v > 0]) if (v > 0).any() else v
+    if grid is None:
+        lo, hi = float(v.min()), float(v.max())
+        pad = (hi - lo) * 0.05 or 0.5
+        grid = np.linspace(lo - pad, hi + pad, points)
+    elif log:
+        grid = np.log10(np.clip(np.asarray(grid, dtype=float), 1e-12, None))
+    sd = float(v.std())
+    n = v.size
+    bw = 1.06 * sd * n ** (-1 / 5) if sd > 0 else 1.0
+    bw = max(bw, 1e-9)
+    z = (grid[:, None] - v[None, :]) / bw
+    dens = np.exp(-0.5 * z * z).sum(axis=1) / (n * bw * math.sqrt(2 * math.pi))
+    x = 10 ** grid if log else grid
+    return x, dens
 
 
 def digitize(values, edges: Sequence[float]) -> np.ndarray:
@@ -290,10 +392,14 @@ def bin_series(s: pd.Series, edges: Sequence[float], *, integer: Optional[bool] 
 # --------------------------------------------------------------------------- time
 
 TIME_FREQS: Tuple[str, ...] = ("min", "5min", "15min", "h", "6h", "D", "W", "M", "Q", "Y")
+CYCLIC_FREQS: Tuple[str, ...] = ("hour_of_day", "weekday", "month_of_year")
 _FREQ_TITLE = {
     "min": "minute", "5min": "5 min", "15min": "15 min", "h": "hour", "6h": "6 h",
     "D": "day", "W": "week", "M": "month", "Q": "quarter", "Y": "year",
+    "hour_of_day": "hour of day", "weekday": "weekday", "month_of_year": "month of year",
 }
+_WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+_MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
 
 
 def freq_title(freq: str) -> str:
@@ -311,6 +417,15 @@ def _time_keys(s: pd.Series, freq: str) -> Tuple[pd.Series, pd.Series]:
     """(sortable key, label) per row for a datetime series bucketed at ``freq``."""
     if isinstance(s.dtype, pd.PeriodDtype):
         s = s.dt.to_timestamp()
+    if freq == "hour_of_day":
+        key = s.dt.hour
+        return key, key.map(lambda h: f"{int(h):02d}h")
+    if freq == "weekday":
+        key = s.dt.dayofweek
+        return key, key.map(lambda d: _WEEKDAYS[int(d)])
+    if freq == "month_of_year":
+        key = s.dt.month
+        return key, key.map(lambda m: _MONTHS[int(m) - 1])
     if freq in ("M", "Q", "Y", "W"):
         p = s.dt.tz_localize(None).dt.to_period(freq) if getattr(s.dt, "tz", None) is not None else s.dt.to_period(freq)
         key = p.dt.start_time

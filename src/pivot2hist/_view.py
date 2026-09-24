@@ -14,10 +14,12 @@ import pandas as pd
 from pandas.api import types as pdt
 
 from . import _binning as B
-from ._fit import COUNT, Dim, DimSpec, FitOptions, Layout, build_table, default_agg, fit_layout, plan_dim
-from ._fit import _resolve_axis
+from ._cluster import cluster_frame, cluster_rows
+from ._fit import COUNT, Dim, DimSpec, FitOptions, Layout, build_table, default_agg, fit_layout, materialize, plan_dim
+from ._fit import _resolve_axis, suggest_layouts
+from ._html import hist_svg, pivot_html
 from ._profile import BOOLEAN, CATEGORICAL, DATETIME, NUMERIC, Profile, profile
-from ._render import hist_html, render_hist, render_pivot
+from ._render import render_hist, render_pivot
 
 PIVOT = "pivot"
 HIST = "hist"
@@ -39,20 +41,21 @@ class Filter:
     label: str
 
     def mask(self, df: pd.DataFrame) -> np.ndarray:
+        if self.kind == "not":
+            return ~self.value.mask(df)
         if self.kind == "query":
-            return df.eval(self.value).to_numpy(dtype=bool)
+            return _bools(df.eval(self.value))
         s = df[self.column]
         if self.kind == "callable":
-            m = self.value(s)
-            return np.asarray(m, dtype=bool)
+            return _bools(self.value(s))
         if self.kind == "eq":
             v = self.value
             if v is None or (isinstance(v, float) and np.isnan(v)):
                 return s.isna().to_numpy()
-            return (s == v).to_numpy(dtype=bool)
+            return _bools(s == v)
         if self.kind == "in":
             vals = list(self.value)
-            m = s.isin([v for v in vals if v is not None]).to_numpy(dtype=bool)
+            m = _bools(s.isin([v for v in vals if v is not None]))
             if any(v is None for v in vals):
                 m |= s.isna().to_numpy()
             return m
@@ -60,9 +63,9 @@ class Filter:
             lo, hi = self.value
             m = np.ones(len(s), dtype=bool)
             if lo is not None:
-                m &= (s >= lo).to_numpy(dtype=bool)
+                m &= _bools(s >= lo)
             if hi is not None:
-                m &= (s < hi).to_numpy(dtype=bool)
+                m &= _bools(s < hi)
             return m
         if self.kind == "op":
             op, v = self.value
@@ -70,13 +73,51 @@ class Filter:
                 "==": lambda a, b: a == b, "!=": lambda a, b: a != b, ">=": lambda a, b: a >= b,
                 "<=": lambda a, b: a <= b, ">": lambda a, b: a > b, "<": lambda a, b: a < b,
             }
-            return ops[op](s, v).fillna(False).to_numpy(dtype=bool)
+            return _bools(ops[op](s, v))
         if self.kind == "regex":
-            return s.astype(str).str.contains(self.value, regex=True, na=False).to_numpy(dtype=bool)
+            return _bools(s.astype(str).str.contains(self.value, regex=True, na=False))
         raise ValueError(f"unknown filter kind {self.kind!r}")  # pragma: no cover
+
+    def negate(self) -> "Filter":
+        if self.kind == "not":
+            return self.value
+        return Filter(self.column, "not", self, f"not {self.label}")
 
     def __str__(self) -> str:
         return self.label
+
+
+_RELATIVE_RE = re.compile(r"^\s*last\s+(\d+(?:\.\d+)?)\s*(s|sec|secs|m|min|mins|h|hr|hrs|hour|hours|d|day|days|w|wk|week|weeks)\s*$", re.I)
+_PCT_RE = re.compile(r"^p(\d{1,2}(?:\.\d+)?)$", re.I)
+_UNIT = {"s": "s", "sec": "s", "secs": "s", "m": "min", "min": "min", "mins": "min", "h": "h", "hr": "h", "hrs": "h",
+         "hour": "h", "hours": "h", "d": "D", "day": "D", "days": "D", "w": "W", "wk": "W", "week": "W", "weeks": "W"}
+
+
+def _axis_scale(edges: np.ndarray) -> Optional[str]:
+    """``"linear"`` for equal widths, ``"log"`` for (roughly) equal ratios, else ``None``."""
+    if edges.size < 3:
+        return "linear"
+    widths = np.diff(edges)
+    if np.allclose(widths, widths[0], rtol=1e-6, atol=0):
+        return "linear"
+    pos = edges[edges > 0]
+    if pos.size >= 3 and (edges <= 0).sum() <= 1:
+        ratios = pos[1:] / pos[:-1]
+        if ratios.min() > 1.3 and ratios.max() / ratios.min() < 3.0:
+            return "log"
+    return None
+
+
+def _bools(m: Any) -> np.ndarray:
+    """A plain boolean numpy mask; missing values (nullable dtypes) count as False."""
+    if isinstance(m, pd.Series):
+        if m.dtype == bool:
+            return m.to_numpy()
+        return m.fillna(False).astype(bool).to_numpy()
+    arr = np.asarray(m)
+    if arr.dtype == object:
+        return np.array([bool(x) if x is not None and x == x else False for x in arr], dtype=bool)
+    return arr.astype(bool)
 
 
 def _coerce_scalar(s: pd.Series, v: Any) -> Any:
@@ -126,6 +167,13 @@ def make_filter(column: str, spec: Any, df: pd.DataFrame) -> Filter:
         shown = ",".join(_fmt(v) for v in vals[:5]) + (",…" if len(vals) > 5 else "")
         return Filter(column, "in", vals, f"{column}∈{{{shown}}}")
     if isinstance(spec, str):
+        rel = _RELATIVE_RE.match(spec) if pdt.is_datetime64_any_dtype(s) else None
+        if rel:
+            amount, unit = float(rel.group(1)), _UNIT[rel.group(2).lower()]
+            delta = pd.Timedelta(amount * 7, unit="D") if unit == "W" else pd.Timedelta(amount, unit=unit)
+            end = s.max()
+            start = end - delta
+            return Filter(column, "range", (start, end + pd.Timedelta(nanoseconds=1)), f"{column}={spec.strip()}")
         m = _OP_RE.match(spec)
         if m and m.group(1) != "=" or (m and m.group(1) == "=" and not pdt.is_string_dtype(s)):
             op, raw = m.group(1), m.group(2)
@@ -133,7 +181,15 @@ def make_filter(column: str, spec: Any, df: pd.DataFrame) -> Filter:
                 return Filter(column, "regex", raw, f"{column}~/{raw}/")
             if op == "=":
                 op = "=="
-            v = _coerce_scalar(s, raw.strip("'\""))
+            raw = raw.strip("'\"")
+            pct = _PCT_RE.match(raw) if pdt.is_numeric_dtype(s) else None
+            if pct:
+                q = float(pct.group(1))
+                v = float(np.nanpercentile(s.to_numpy(dtype=float, na_value=np.nan), q))
+                if op == "==":
+                    op = ">="
+                return Filter(column, "op", (op, v), f"{column}{op}p{pct.group(1)} ({B.human(v)})")
+            v = _coerce_scalar(s, raw)
             if op == "==":
                 return make_filter(column, v, df)
             return Filter(column, "op", (op, v), f"{column}{op}{_fmt(v)}")
@@ -170,6 +226,7 @@ class View:
         filters: Sequence[Filter] = (),
         parent: Optional["View"] = None,
         spec: Optional[Mapping[str, Any]] = None,
+        display: Optional[Mapping[str, Any]] = None,
     ):
         if mode not in MODES:
             raise ValueError(f"mode must be one of {MODES}")
@@ -180,6 +237,7 @@ class View:
         self._filters: Tuple[Filter, ...] = tuple(filters)
         self._parent = parent
         self._spec: Dict[str, Any] = dict(spec or {})
+        self._display: Dict[str, Any] = dict(display or {})
         self._cache: Dict[str, Any] = {}
 
     # ------------------------------------------------------------------ construction
@@ -205,7 +263,7 @@ class View:
     def _clone(self, **changes: Any) -> "View":
         kw = dict(
             data=self._source, layout=self._layout, options=self._options, mode=self._mode,
-            filters=self._filters, parent=self._parent, spec=self._spec,
+            filters=self._filters, parent=self._parent, spec=self._spec, display=self._display,
         )
         kw.update(changes)
         return View(**kw)
@@ -374,6 +432,171 @@ class View:
             vc = data[col].value_counts(dropna=False).head(n)
             out[col] = [(None if (isinstance(k, float) and np.isnan(k)) else k, int(c)) for k, c in vc.items()]
         return out
+
+    def exclude(self, *args: Any, **kwargs: Any) -> "View":
+        """The complement of :meth:`slice`: drop rows matching the given slices."""
+        tmp = self.slice(*args, refit=False, **kwargs)
+        new = tuple(f.negate() for f in tmp.filters[len(self._filters):])
+        v = self._clone(filters=self._filters + new)
+        return v.refit() if v._layout_stale() else v
+
+    def top(self, column: str, n: int = 10, *, by: Optional[str] = None) -> "View":
+        """Keep only the ``n`` heaviest values of ``column`` (by row count, or by ``sum(by)``)."""
+        data = self.data
+        if by is None:
+            keep = data[column].value_counts().index[:n]
+        else:
+            keep = data.groupby(column, observed=True)[by].sum().sort_values(ascending=False).index[:n]
+        f = Filter(column, "in", list(keep), f"{column}\u2208top{n}" + (f"[{by}]" if by else ""))
+        v = self._clone(filters=self._filters + (f,))
+        return v.refit() if v._layout_stale() else v
+
+    def drill(self, *args: Any, **kwargs: Any) -> "View":
+        """Slice and refit: zoom into a cell/row and let the fit pick the next dimensions."""
+        return self.slice(*args, refit=True, **kwargs)
+
+    def sample(self, n: Optional[int] = None, frac: Optional[float] = None, *, seed: int = 0) -> "View":
+        """Reduce size: the same view over a random sample of the sliced rows."""
+        data = self.data
+        if n is None and frac is None:
+            n = min(len(data), 10_000)
+        if n is not None:
+            n = min(int(n), len(data))
+            src = data.sample(n=n, random_state=seed)
+        else:
+            src = data.sample(frac=float(frac), random_state=seed)
+        return self._clone(data=src.sort_index())
+
+    def _dim_for(self, column: str) -> Tuple[str, int, Dim]:
+        for axis in ("rows", "cols"):
+            dims = getattr(self._layout, axis)
+            for i, d in enumerate(dims):
+                if d.column == column:
+                    return axis, i, d
+        raise KeyError(f"{column!r} is not a dimension of this layout ({self._layout.describe()})")
+
+    def level(self, column: str, level: Union[str, int]) -> "View":
+        """Change how a dimension is bucketed: a semantic level (``"/24"``, ``"class"``,
+        ``"host"``), a time bucket (``"h"``, ``"D"``, ``"hour_of_day"``, ``"weekday"``) or a
+        bin count for numeric dimensions."""
+        axis, i, d = self._dim_for(column)
+        if d.kind == "time":
+            spec: Dict[str, Any] = {"column": column, "freq": str(level)}
+        elif d.kind == "binned":
+            n = int(level)
+            spec = {"column": column, "bins": n, "levels": max(2, n + 1)}
+        else:
+            spec = {"column": column, "level": str(level)}
+        rows = [x for x in self._layout.rows]
+        cols = [x for x in self._layout.cols]
+        (rows if axis == "rows" else cols)[i] = spec  # type: ignore[call-overload]
+        return self.relayout(rows=rows, cols=cols, **self._measure_spec())
+
+    def _measure_spec(self) -> Dict[str, Any]:
+        """values/agg keywords that reproduce this layout's measure (count stays count)."""
+        if self._layout.values is None:
+            return {"values": None, "agg": COUNT}
+        return {"values": self._layout.values, "agg": self._layout.agg}
+
+    def _step(self, column: str, direction: int) -> "View":
+        axis, i, d = self._dim_for(column)
+        cp = self.profile[column] if column in self.profile else None
+        if d.kind == "time":
+            freqs = list(B.TIME_FREQS)  # fine -> coarse, so coarser means a later entry
+            cur = freqs.index(d.freq) if d.freq in freqs else freqs.index("D")
+            nxt = min(max(cur - direction, 0), len(freqs) - 1)
+            return self.level(column, freqs[nxt])
+        if d.kind == "binned":
+            n = max(2, len(d.edges or ()) - 1)
+            return self.level(column, max(2, n // 2) if direction < 0 else n * 2)
+        levels = list(cp.hierarchy) if cp is not None else []
+        if not levels:
+            raise ValueError(f"{column!r} has no drill hierarchy")
+        cur = levels.index(d.level) if d.level in levels else len(levels) - 1
+        nxt = min(max(cur + direction, 0), len(levels) - 1)
+        return self.level(column, levels[nxt])
+
+    def coarser(self, column: str) -> "View":
+        """Roll a dimension up one level (``/24`` -> ``/16``, hour -> 6 h, fewer bins)."""
+        return self._step(column, -1)
+
+    def finer(self, column: str) -> "View":
+        """Drill a dimension down one level (``/16`` -> ``/24``, day -> 6 h, more bins)."""
+        return self._step(column, +1)
+
+    # ------------------------------------------------------------------ auto-guess
+
+    def suggest(self, n: int = 5) -> List[Layout]:
+        """The ``n`` best distinct layouts for the sliced data, best first."""
+        spec = {k: self._spec.get(k) for k in ("rows", "cols", "values", "agg")}
+        if self.data.empty:
+            return [self._layout]
+        out = [lay for _, lay in suggest_layouts(self.data, self._options, n, prof=self.profile, **spec)]
+        return out or [self._layout]
+
+    def alternatives(self, n: int = 5) -> List["View"]:
+        """:meth:`suggest` as ready-made views."""
+        return [self.use(lay) for lay in self.suggest(n)]
+
+    def use(self, layout: Union[Layout, int]) -> "View":
+        """Switch to a suggested layout (a :class:`Layout` or its index in :meth:`suggest`)."""
+        if isinstance(layout, int):
+            layout = self.suggest(layout + 1)[layout]
+        spec = {"rows": list(layout.rows), "cols": list(layout.cols), "values": layout.values,
+                "agg": COUNT if layout.values is None else layout.agg}
+        return self._clone(layout=layout, spec=spec)
+
+    # ------------------------------------------------------------------ clustering
+
+    def cluster(
+        self,
+        k: Optional[int] = None,
+        *,
+        on: Optional[Union[str, Sequence[str]]] = None,
+        collapse: bool = False,
+        name: str = "cluster",
+        normalize: str = "row",
+    ) -> "View":
+        """Group rows with k-means and use the groups as a dimension.
+
+        With ``on=None`` the *rows of the current pivot* are clustered by the shape of their
+        column profile (ports that get denied alike, hosts with the same method mix ...).
+        The cluster becomes the outer row level, or the only row level with
+        ``collapse=True`` (reduce size). With ``on`` = numeric column(s), the *records* are
+        clustered on those columns instead. ``k`` defaults to a silhouette-chosen value.
+        """
+        data = self.data
+        if name in self._source.columns:
+            i = 2
+            while f"{name}{i}" in self._source.columns:
+                i += 1
+            name = f"{name}{i}"
+        if on is None:
+            table = self.pivot()
+            if table.shape[0] < 3:
+                raise ValueError("need at least 3 pivot rows to cluster")
+            labels, _ = cluster_rows(table, k, normalize=normalize, seed=self._options.seed)
+            keys = [materialize(data, d).astype(object) for d in self._layout.rows]
+            lookup = dict(zip(table.index, labels.tolist()))
+            if len(keys) == 1:
+                lab = keys[0].map(lookup)
+            else:
+                tuples = pd.Series(list(zip(*[kk.to_numpy() for kk in keys])), index=data.index)
+                lab = tuples.map(lookup)
+            lab = pd.Series(pd.Categorical(lab, categories=list(labels.cat.categories), ordered=True), index=data.index)
+            k_found = len(labels.cat.categories)
+            group = Dim(name, "categorical", k_found, order="natural", natural=k_found, quality=1.0)
+            # nested under the cluster, the existing rows are partitioned, not multiplied
+            rows: List[Any] = [group] + ([] if collapse else list(self._layout.rows))
+        else:
+            cols = [on] if isinstance(on, str) else list(on)
+            lab = cluster_frame(data, cols, k, seed=self._options.seed, name=name)
+            rows = [name]
+        src = self._source.copy()
+        src[name] = lab.astype(object).reindex(src.index)
+        src[name] = pd.Categorical(src[name], categories=list(lab.cat.categories), ordered=True)
+        base = View(src, self._layout, options=self._options, mode=self._mode, filters=self._filters, spec=self._spec, display=self._display)
+        return base.relayout(rows=rows, cols=list(self._layout.cols), **self._measure_spec())
 
     def _layout_stale(self) -> bool:
         data = self.data
@@ -560,12 +783,53 @@ class View:
     def __repr__(self) -> str:
         return self.render()
 
-    def _repr_html_(self) -> str:
-        if self.is_hist:
-            return hist_html(self.bins(), title=self.title())
-        from ._render import format_table
+    def style(self, **display: Any) -> "View":
+        """Display options for :meth:`html` / notebooks.
 
-        return f"<div style='font-family:monospace;margin-bottom:4px'>{self.title()}</div>" + format_table(self.pivot()).to_html()
+        Pivot: ``heat`` (``"table"`` | ``"column"`` | ``"row"`` | ``"none"``), ``bars``,
+        ``totals``, ``compact``, ``max_rows``. Histogram: ``stacked``, ``density``,
+        ``log_y``, ``width``, ``height``, ``show_values``.
+        """
+        return self._clone(display={**self._display, **display})
+
+    @property
+    def display(self) -> Dict[str, Any]:
+        return dict(self._display)
+
+    def html(self, title: bool = True) -> str:
+        """Rich HTML: a heatmap table for pivots, an SVG bar chart for histograms."""
+        d = self._display
+        t = self.title() if title else None
+        if self.is_hist:
+            table = self.bins()
+            density = None
+            rows = self._layout.rows
+            if d.get("density", True) and len(rows) == 1 and rows[0].kind == "binned" and rows[0].column in self.data:
+                edges = np.asarray(rows[0].edges or (0, 1), dtype=float)
+                scale = _axis_scale(edges)  # the curve only makes sense on a linear or log axis
+                if scale is not None:
+                    density = B.kde(self.data[rows[0].column], log=(scale == "log"), seed=self._options.seed)
+            return hist_svg(
+                table, title=t, width=int(d.get("width", 760)), height=int(d.get("height", 340)), density=density,
+                stacked=bool(d.get("stacked", False)), log_y=bool(d.get("log_y", False)), show_values=d.get("show_values"),
+            )
+        return pivot_html(
+            self.pivot(), title=t, heat=str(d.get("heat", "table")), bars=bool(d.get("bars", False)),
+            totals=bool(d.get("totals", False)), compact=bool(d.get("compact", False)), max_rows=d.get("max_rows"),
+        )
+
+    def svg(self) -> str:
+        """The histogram of this view as SVG (toggles to histogram mode if needed)."""
+        return self.as_hist().html()
+
+    def _repr_html_(self) -> str:
+        return self.html()
+
+    def explore(self, **kw: Any) -> Any:
+        """Open the interactive Jupyter explorer (needs ``ipywidgets``)."""
+        from .ui import explore
+
+        return explore(self, **kw)
 
     def plot(self, ax: Any = None, **kw: Any) -> Any:
         """Draw with matplotlib (optional dependency): bars for histograms, a heatmap for pivots."""

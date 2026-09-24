@@ -162,7 +162,7 @@ def test_render_modes(fw):
     assert "█" in uni or "▏" in uni
     assert str(v) == repr(v) == v.render()
     html = v._repr_html_()
-    assert "<table" in html and v.toggle()._repr_html_().count("<tr>") >= 2
+    assert "<table" in html and "<svg" in v.toggle()._repr_html_()
     assert "... " in v.render(max_rows=3)
 
 

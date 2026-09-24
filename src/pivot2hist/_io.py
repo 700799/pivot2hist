@@ -81,6 +81,47 @@ def _to_datetime(s: pd.Series) -> pd.Series:
     return pd.to_datetime(s, errors="coerce")
 
 
+_BOOL_WORDS = {"true": True, "false": False, "yes": True, "no": False, "y": True, "n": False, "t": True, "f": False, "on": True, "off": False}
+
+
+def infer_scalars(df: pd.DataFrame, *, min_frac: float = 0.98) -> pd.DataFrame:
+    """Text columns holding numbers (``"12"``, ``"3.5"``, ``"1,024"``) or booleans
+    (``yes/no``, ``true/false``) become numeric / boolean columns."""
+    out = df
+    for c in df.columns:
+        s = df[c]
+        if not (pdt.is_string_dtype(s) or pdt.is_object_dtype(s)):
+            continue
+        non_null = s.dropna()
+        if non_null.empty:
+            continue
+        try:
+            probe = non_null.head(500).astype(str).str.strip()
+        except (TypeError, ValueError):
+            continue
+        low = probe.str.lower()
+        if low.isin(_BOOL_WORDS.keys()).mean() >= min_frac and low.nunique() <= 2:
+            full = non_null.astype(str).str.strip().str.lower()
+            if full.isin(_BOOL_WORDS.keys()).mean() >= min_frac:
+                if out is df:
+                    out = df.copy()
+                mapped = s.astype("string").str.strip().str.lower().map(_BOOL_WORDS)
+                out[c] = mapped.astype("boolean") if mapped.isna().any() else mapped.astype(bool)
+            continue
+        cleaned = probe.str.replace(",", "", regex=False)
+        num = pd.to_numeric(cleaned, errors="coerce")
+        if num.notna().mean() >= min_frac and not probe.str.match(r"^0\d+$").any():
+            full = pd.to_numeric(non_null.astype(str).str.strip().str.replace(",", "", regex=False), errors="coerce")
+            if full.notna().mean() >= min_frac:
+                if out is df:
+                    out = df.copy()
+                col = pd.to_numeric(s.astype("string").str.strip().str.replace(",", "", regex=False), errors="coerce")
+                if col.dropna().mod(1).eq(0).all() and col.notna().all():
+                    col = col.astype("int64")
+                out[c] = col
+    return out
+
+
 def _epoch_columns(df: pd.DataFrame) -> pd.DataFrame:
     """Integer columns named like timestamps holding epoch seconds/millis become datetimes."""
     out = df
@@ -104,12 +145,15 @@ def _epoch_columns(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def load(source: Source, *, parse_dates: bool = True, **read_kwargs: Any) -> pd.DataFrame:
+def load(source: Source, *, parse_dates: bool = True, infer_types: bool = True, **read_kwargs: Any) -> pd.DataFrame:
     """Turn almost anything tabular into a DataFrame.
 
     Accepts a DataFrame/Series, a file path (csv/tsv/json/jsonl/parquet/xlsx/feather,
     optionally compressed), a list of dicts, a dict of lists, or a 2-D numpy array.
-    With ``parse_dates`` (default) text columns that look like timestamps are parsed.
+    A DatetimeIndex becomes a column. With ``infer_types`` text columns holding numbers
+    or yes/no words are converted; with ``parse_dates`` text that looks like timestamps
+    (and epoch integers in time-named columns) is parsed. Nothing is copied unless a
+    column actually changes.
     """
     if isinstance(source, pd.DataFrame):
         df = source
@@ -127,12 +171,31 @@ def load(source: Source, *, parse_dates: bool = True, **read_kwargs: Any) -> pd.
         df = pd.DataFrame(dict(source))
     else:
         df = pd.DataFrame(list(source))
+    if isinstance(df.index, pd.DatetimeIndex) or (isinstance(df.index, pd.MultiIndex) and any(
+        isinstance(lvl, pd.DatetimeIndex) for lvl in df.index.levels
+    )):
+        df = df.reset_index()  # a time index becomes a regular (timestamp) column
     if any(not isinstance(c, str) for c in df.columns):
         df = df.copy() if df is source else df
         df.columns = [str(c) for c in df.columns]
+    if len(set(df.columns)) != len(df.columns):
+        df = df.copy() if df is source else df
+        seen: dict = {}
+        cols = []
+        for c in df.columns:
+            seen[c] = seen.get(c, 0) + 1
+            cols.append(c if seen[c] == 1 else f"{c}.{seen[c] - 1}")
+        df.columns = cols
+    periods = [c for c in df.columns if isinstance(df[c].dtype, pd.PeriodDtype)]
+    if periods:
+        df = df.copy() if df is source else df
+        for c in periods:
+            df[c] = df[c].dt.to_timestamp()  # periods behave like timestamps everywhere downstream
+    if infer_types:
+        df = infer_scalars(df)
     if parse_dates:
         df = infer_datetimes(_epoch_columns(df))
     return df
 
 
-__all__ = ["load", "infer_datetimes"]
+__all__ = ["load", "infer_datetimes", "infer_scalars"]
