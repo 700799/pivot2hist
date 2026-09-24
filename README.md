@@ -5,8 +5,10 @@ Jupyter menus. Built for cyber logs (firewall, auth, DNS, EDR ...) but the type 
 generic, so it works on any tabular data.
 
 ```
-pip install pivot2hist              # pandas + numpy only
-pip install "pivot2hist[jupyter]"   # + ipywidgets for the interactive explorer
+pip install pivot2hist                       # pandas + numpy only
+pip install "pivot2hist[jupyter]"            # + ipywidgets for the interactive explorer
+pip install "pivot2hist[parquet,duckdb]"     # + pyarrow / duckdb sources (surveyed and paged)
+pip install "pivot2hist[cluster]"            # + scikit-learn for real HDBSCAN
 ```
 
 ```python
@@ -21,6 +23,9 @@ v.suggest()                        # the auto-guess menu: alternative layouts, b
 v.cluster(4)                       # group similar rows with k-means
 v.coarser("src_ip")                # 10.0.1.5 -> 10.0.1.0/24 -> 10.0.0.0/16
 p2h.explore(df)                    # Jupyter menus for all of the above
+p2h.fit("huge.parquet")            # surveyed against your RAM; fitted on a sample, aggregated page by page
+p2h.chains(df, "event", by="user", time="timestamp")   # Markov transition matrix as a pivot
+p2h.verbose(); p2h.stats(7)        # scrolling step log; the seven costliest steps
 ```
 
 Shell: `pivot2hist firewall.csv --slice action=deny --hist --on bytes --by dst_port`,
@@ -211,18 +216,112 @@ Clustering is numpy k-means++ with an automatic k (centroid silhouette); no scik
 needed. Row profiles are compared as proportions so a busy and a quiet port with the same
 allow/deny mix land together.
 
+## Big data: survey first, then page
+
+Files and DuckDB sources are **surveyed** before anything is loaded: rows (exact from
+Parquet/DuckDB metadata, estimated for CSV/JSONL), size on disk, bytes per row calibrated
+on a probe, the estimated in-memory size, and the machine (RAM total/available, including
+cgroup limits inside containers, CPU count, load, this process's footprint). A **plan**
+follows from the memory budget (default: half the available RAM):
+
+| verdict | plan | what happens |
+| --- | --- | --- |
+| fits | `full` | load everything |
+| tight | `downcast` | load everything, then repetitive text -> category, ints -> smallest width, float64 -> float32 |
+| choke | `paged` | fit on a sample (spread across Parquet row groups / a DuckDB reservoir sample); aggregate page by page |
+
+```python
+p2h.survey("events.parquet")                       # the report, no loading
+p2h.fit("events.parquet")                          # auto plan
+p2h.fit("events.csv", memory_budget_mb=2000)       # your budget
+p2h.fit("events.parquet", mode="paged", page_rows=500_000, columns=["ts", "src_ip", "action", "bytes"])
+p2h.fit("duckdb://logs.duckdb?table=events")       # or a connection: p2h.fit(con, query="SELECT ...")
+```
+
+Paged views behave like any other: `toggle`, `slice`, `histogram`, `suggest`, `cluster`
+and `cocluster` all work, with `count`, `sum`, `min`, `max` and `mean` **exact** across
+pages (`mean` is combined from sums and counts) and top-N buckets frozen from the sample
+so every page folds the same way. `median`, `std` and `nunique` fall back to the sample
+and say so in the title. `v.sample(n)` and `v.materialize()` give in-memory views when you
+want the rest (record clustering, plotting).
+
+```
+survey       parquet: 400,000 rows, ~52 MB -> choke, paged    0.11s  cpu  0.15s  mem    +50 MB
+plan         paged: 9 pages of 46,218 rows, fit on a 92,436-row sample; ~52 MB exceeds the 40 MB budget
+sample       92,436 rows, 12 MB    0.34s  cpu  0.54s  mem    +80 MB
+fit          92,436 rows x 11 cols -> sum(bytes) by dst_ip (top 39) x rule    2.31s  cpu  2.31s  mem     +5 MB
+  page         1/9: 46,218 rows    0.02s  cpu  0.02s  mem     +0 MB
+  page         2/9: 46,218 rows    0.01s  cpu  0.01s  mem     +0 MB
+  page         ... 6 more pages
+  page         9/9: 30,256 rows    0.01s  cpu  0.01s  mem     +0 MB
+pivot        sum(bytes) by dst_ip (top 39) x rule -> 40 x 8    0.71s  cpu  0.88s  mem    +44 MB
+```
+
+## Log and stats
+
+`p2h.verbose()` prints every major step (survey, plan, sample, pages, fit, pivot, cluster,
+render ...) to stderr as it finishes, with wall time, CPU time and the memory delta.
+`p2h.log.tail(12)` gives the last lines, `p2h.log.listen(fn)` streams them to your own
+sink (the explorer's log panel is one). `p2h.stats(7)` (or `v.stats()`) is the report of
+the seven costliest kinds of step: calls, total seconds, CPU seconds, peak memory delta,
+last detail.
+
+## Matrices and chains
+
+```python
+v = p2h.chains(df, "event", by="user", time="timestamp")     # rows = from, cols = to, counts
+p2h.chains(df, "event", by="user", time="timestamp", normalize=True)   # row probabilities
+p2h.chains(df, "dst_port", by="src_ip", time="timestamp", order=2)     # conditioned on the previous two
+p2h.sequences(df, "event", by="user", time="timestamp", length=3, n=10) # most frequent 3-step chains
+p2h.steady_state(p2h.transition_matrix(df, "event", by="user"))         # stationary distribution
+```
+
+Transitions never cross an entity (`by`); the result is an ordinary pivot, so
+`toggle()`, slices, `cocluster()` and the heatmap all apply. For an auth log the chains
+tab shows `login_failure → login_failure → login_success` with the number of users it
+happened to.
+
+**Co-clustering** groups rows *and* columns of any pivot into matching blocks and makes
+the block structure visible on the heatmap: `v.cocluster()` (spectral co-clustering of the
+normalised matrix, block count from the eigengap) or `v.cocluster(method="mcl")` (Markov
+clustering: random walks on the bipartite row-column graph, expansion and inflation until
+they settle). `nest=False` only reorders the axes instead of adding block levels.
+
+## Density clustering
+
+`method="dbscan"` clusters by density with an automatic radius (knee of the k-distance
+curve); outliers become a `noise` label, which is what you want for scanners and odd
+hosts. `method="hdbscan"` uses scikit-learn's HDBSCAN (or the `hdbscan` package) when
+installed and falls back to DBSCAN with a note in the log otherwise.
+
+```python
+v.cluster(method="dbscan")                     # pivot rows; noise rows grouped apart
+v.cluster(on=["bytes", "duration"], method="hdbscan")
+p2h.cluster(df, ["bytes", "duration"], method="dbscan")
+```
+
 ## Jupyter explorer
 
 ```python
-p2h.explore(df)          # or v.explore()
+p2h.explore(df)                                  # or v.explore(); files/DuckDB are surveyed and paged
 ```
 
-An ipywidgets app: Pivot/Histogram toggle, **Best fit**, **Suggest** (ranked alternatives
-in a dropdown), Undo/Reset, and tabs for Layout (rows, columns, values, agg, layers, box,
-bin rule, scale, order), Histogram (on, by, bins, stacked, density, log y), Slicers
-(multi-selects for labels, percentile range sliders for numbers, date ranges, a query
-box, top-N), Reduce & cluster (sample, cluster k / collapse / on, coarser / finer),
-Style, and a Code tab that always shows the Python reproducing the current view.
+An ipywidgets app: Pivot / Histogram / Chains toggle, **Best fit**, **Suggest** (ranked
+alternatives in a dropdown), Undo/Reset, and tabs for Layout (rows, columns, values, agg,
+layers, box, bin rule, scale, order), Histogram (on, by, bins, stacked, density, log y),
+Slicers (multi-selects for labels, percentile range sliders for numbers, date ranges, a
+query box, top-N), Reduce & cluster (sample, cluster k / method / on / collapse,
+co-cluster, coarser / finer), Chains (state, entity, time, probabilities, plus the most
+frequent 3-step chains), Style, Code (the Python reproducing the current view), Profile,
+Data (the survey and plan) and Stats (the seven costliest steps). A scrolling log of major
+steps sits under the output. `explorer.snapshot_html()` renders a static picture of the
+interface for docs or sharing.
+
+![explorer, reduce & cluster tab, on a paged Parquet source](docs/explorer-reduce.png)
+
+![explorer, chains tab, on auth logs](docs/explorer-chains.png)
+
+![graphics: clustered heatmap, /24 roll-up, hour-of-day x weekday, natural-break stacked histogram](docs/graphics.png)
 
 ## Loading data
 
@@ -238,7 +337,10 @@ pivot2hist FILE [--hist] [--on COL] [--by COL,COL] [--bins N|rule] [--scale auto
                 [--rows COL,COL] [--cols COL,COL] [--values COL] [--agg sum|mean|...] [--count]
                 [--max-rows N] [--max-cols N] [--layers N] [--aspect R]
                 [--slice COL=VAL]... [--where EXPR]
-                [--json | --csv | --layout | --profile | --slicers] [--width N] [--ascii]
+                [--survey] [--budget MB] [--mode auto|full|downcast|sample|paged] [--columns A,B] [--page-rows N]
+                [--table T | --query SQL]   (duckdb://db.duckdb sources)
+                [--chains STATE --by ENTITY --time COL]
+                [-v] [--stats] [--json | --csv | --layout | --profile | --slicers] [--width N] [--ascii]
 pivot2hist --demo firewall|auth
 cat data.csv | pivot2hist -
 ```
@@ -267,8 +369,10 @@ cat data.csv | pivot2hist -
 
 Everything is pandas/numpy; candidate layouts are scored on a sample and semantic
 bucketing works on distinct values. On one core: 5k rows fit in ~0.3 s, 300k in ~3.5 s,
-1M rows fit + pivot in ~13 s. A Rust extension was considered and skipped: the hot paths
-are already C (pandas groupby, numpy unique) and the search is bounded by sampling.
+1M rows fit + pivot in ~13 s in memory; larger sources stream through pages at roughly
+1 s per million rows per aggregation, using memory for one page at a time. A Rust
+extension was considered and skipped: the hot paths are already C (pandas groupby, numpy
+unique, DuckDB's engine for DuckDB sources) and the search is bounded by sampling.
 
 ## Development
 

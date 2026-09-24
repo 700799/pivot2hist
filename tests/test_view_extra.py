@@ -136,3 +136,27 @@ def test_time_series_measure():
     assert any(d.column == "t" for d in v.layout.rows)
     log = p2h.sample.firewall_logs(500)
     assert not p2h.profile(log).is_time_series
+
+
+def test_cluster_methods_and_cocluster_views(fw):
+    v = p2h.fit(fw, max_rows=12, max_cols=5, agg="count")
+    d = v.cluster(method="dbscan")
+    assert d.layout.rows[0].column == "cluster" and d.pivot().to_numpy().sum() == len(fw)
+    h = v.cluster(method="hdbscan", collapse=True)
+    assert h.pivot().to_numpy().sum() == len(fw)
+    r = v.cluster(on="bytes", method="dbscan")
+    assert r.pivot().index.str.startswith(("c", "noise")).all()
+    with pytest.raises(ValueError):
+        v.cluster(method="nope")
+    cc = v.cocluster()
+    assert cc.layout.rows[0].column == "block_r" and cc.layout.cols[0].column == "block_c"
+    assert cc.pivot().to_numpy().sum() == len(fw) and cc.pivot().shape[0] == v.pivot().shape[0]
+    flat = v.cocluster(2, nest=False)
+    assert flat.pivot().shape == v.pivot().shape and flat.layout.rows[0].keep is not None
+    mcl = v.cocluster(method="mcl")
+    assert mcl.pivot().to_numpy().sum() == len(fw)
+    again = cc.cocluster()
+    assert again.layout.rows[0].column == "block_r2"
+    assert "cluster" not in fw.columns and "block_r" not in fw.columns
+    assert cc.slice(block_r=cc.pivot().index[0][0]).pivot().shape[0] >= 1  # derived columns are sliceable
+    assert cc.to_dict()["layout"]["rows"][0]["column"] == "block_r"

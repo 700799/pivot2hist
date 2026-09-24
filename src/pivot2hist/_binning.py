@@ -486,13 +486,15 @@ def categorize(
     top: Optional[int] = None,
     order: str = "auto",
     other: str = OTHER,
+    keep: Optional[Sequence] = None,
 ) -> pd.Series:
     """Ordered categorical for a label column.
 
     ``top`` keeps the ``top`` most frequent values and folds the rest into ``"(other)"``.
-    ``order`` is ``"natural"`` (sorted), ``"frequency"`` (most common first) or ``"auto"``
-    (natural for numbers/booleans, frequency for text). ``"(other)"`` and ``"(null)"``
-    always go last.
+    ``keep`` freezes the kept values instead (so every page of a big source folds the same
+    way); with ``order="keep"`` they also keep that order. ``order`` is otherwise
+    ``"natural"`` (sorted), ``"frequency"`` (most common first) or ``"auto"`` (natural for
+    numbers/booleans, frequency for text). ``"(other)"`` and ``"(null)"`` always go last.
     """
     if isinstance(s.dtype, pd.CategoricalDtype):
         s = s.astype(object)
@@ -510,13 +512,36 @@ def categorize(
         order = "natural" if numeric_like else "frequency"
 
     used_other = False
+    if keep is not None:
+        keep_list = [k for k in keep if k not in (other, NULL)]
+        outside = ~vals.isin(keep_list)
+        if outside.any():
+            vals = vals.where(~outside, other).astype(object)
+            used_other = True
+        present = [k for k in keep_list if k in set(counts.index)] if order != "keep" else keep_list
+        if order == "keep":
+            cats = list(keep_list)
+        elif order == "frequency":
+            freq = counts.reindex(present).fillna(0).sort_values(ascending=False)
+            cats = list(freq.index)
+        else:
+            cats = _natural_sort_key(list(present))
+        if used_other:
+            cats.append(other)
+        has_null = bool((~valid).any())
+        if has_null:
+            cats.append(NULL)
+        out = pd.Series(NULL, index=s.index, dtype=object)
+        out[valid] = vals.to_numpy(dtype=object)
+        return pd.Series(pd.Categorical(out, categories=cats, ordered=True), index=s.index, name=s.name)
+
     if top is not None and len(counts) > top:
-        keep = counts.index[:top]
-        vals = vals.where(vals.isin(keep), other).astype(object)
-        counts = counts.loc[keep]
+        kept = counts.index[:top]
+        vals = vals.where(vals.isin(kept), other).astype(object)
+        counts = counts.loc[kept]
         used_other = True
 
-    if order == "frequency":
+    if order in ("frequency", "keep"):
         cats = list(counts.index)
     else:
         cats = _natural_sort_key(list(counts.index))

@@ -14,7 +14,7 @@ always show the equivalent Python.
 from __future__ import annotations
 
 import html as _html
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -25,10 +25,14 @@ except ImportError as e:  # pragma: no cover
     raise ImportError("pivot2hist.ui needs ipywidgets: pip install 'pivot2hist[jupyter]'") from e
 
 from ._binning import RULES, human
+from ._chains import sequences as _sequences
+from ._cluster import COMETHODS, METHODS
 from ._fit import AGGS, COUNT, FitOptions, Layout
-from ._io import load
+from ._log import log
 from ._profile import BOOLEAN, CATEGORICAL, DATETIME, NUMERIC, profile
 from ._view import HIST, PIVOT, View
+
+CHAINS = "chains"
 
 _NUM_STEPS = 24
 
@@ -49,18 +53,41 @@ class Explorer:
         self.slices: List[Tuple[str, Any]] = []  # ("slice", {col: spec}) | ("query", expr) | ("top", (col, n))
         self.mode = view.mode
         self.hist: Dict[str, Any] = {"on": None, "by": None, "bins": None}
-        self.reduce: Dict[str, Any] = {"sample": None, "cluster": None, "cluster_on": None, "collapse": False}
+        self.reduce: Dict[str, Any] = {"sample": None, "cluster": None, "cluster_on": None, "collapse": False,
+                                       "method": "kmeans", "cocluster": None}
+        self.chain: Dict[str, Any] = {"state": None, "by": None, "time": None, "normalize": False}
         self.display: Dict[str, Any] = {**view.display, "width": width, "height": height}
         self.refit_sliced = False
         self.history: List[Dict[str, Any]] = []
         self.view: View = view
+        self._root_view = view  # keeps a paged source alive across rebuilds
         self._syncing = False
         self._root_cache: Dict[Tuple, View] = {}
         self._max_slicers = max_slicers
+        self._log_lines: List[str] = []
         self._build_widgets()
+        self._unlisten = log.listen(self._on_log)
         for f in view.filters:  # carry existing slices along as an opaque query-ish step
             self.slices.append(("filter", f))
         self._rebuild()
+
+    def close(self) -> None:
+        """Stop listening to the step log."""
+        self._unlisten()
+
+    def _on_log(self, entry: Any) -> None:
+        self._log_lines.append(entry.format())
+        self._log_lines = self._log_lines[-200:]
+        self._refresh_log()
+
+    def _refresh_log(self) -> None:
+        lines = "\n".join(_html.escape(l) for l in self._log_lines[-60:])
+        self.w_log.value = (
+            "<div style='font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;color:#333;background:#fafafa;"
+            "border:1px solid #e5e5e5;border-radius:4px;padding:6px 8px;height:120px;overflow-y:auto;white-space:pre;"
+            "display:flex;flex-direction:column-reverse'>"
+            f"<div>{lines}</div></div>"
+        )
 
     # ------------------------------------------------------------------ widgets
 
@@ -72,7 +99,8 @@ class Explorer:
         st = {"description_width": "80px"}
 
         # -- top bar
-        self.w_mode = W.ToggleButtons(options=[("Pivot", PIVOT), ("Histogram", HIST)], value=self.mode, tooltips=["table", "bars"])
+        self.w_mode = W.ToggleButtons(options=[("Pivot", PIVOT), ("Histogram", HIST), ("Chains", CHAINS)], value=self.mode,
+                                      tooltips=["heatmap table", "bar chart", "Markov transition matrix of a state column"])
         self.w_best = W.Button(description="Best fit", icon="magic", tooltip="auto-fit rows/cols/measure on the sliced data")
         self.w_suggest_btn = W.Button(description="Suggest", icon="lightbulb-o", tooltip="rank alternative layouts")
         self.w_suggest = W.Dropdown(options=[("alternatives…", None)], value=None, layout=W.Layout(width="360px"))
@@ -148,16 +176,32 @@ class Explorer:
         # -- reduce & cluster tab
         self.w_sample = W.Dropdown(options=[("all rows", None), ("100k rows", 100_000), ("10k rows", 10_000), ("1k rows", 1_000)], value=None, description="Sample", style=st)
         self.w_cluster = W.Dropdown(options=[("off", None), ("auto k", "auto")] + [(str(k), k) for k in range(2, 9)], value=None, description="Cluster", style=st)
+        self.w_method = W.Dropdown(options=list(METHODS), value="kmeans", description="method", style=st)
         self.w_cluster_on = W.Dropdown(options=[("pivot rows", None)] + [(c, c) for c in numeric], value=None, description="on", style=st)
         self.w_collapse = W.Checkbox(value=False, description="collapse rows into clusters")
+        self.w_cocluster = W.Dropdown(options=[("off", None)] + [(m, m) for m in COMETHODS], value=None, description="Co-cluster", style=st)
         self.w_dim = W.Dropdown(options=[], description="Dimension", style=st)
         self.w_coarser = W.Button(description="Coarser", icon="compress", tooltip="/24 -> /16, hour -> day, fewer bins")
         self.w_finer = W.Button(description="Finer", icon="expand")
         reduce_tab = W.VBox([
-            W.HTML("<i>Reduce size: sample rows, shrink the box (Layout tab), roll dimensions up, or cluster similar rows.</i>"),
+            W.HTML("<i>Reduce size: sample rows, shrink the box (Layout tab), roll dimensions up, cluster similar rows, "
+                   "or co-cluster rows and columns into blocks.</i>"),
             self.w_sample,
-            W.HBox([self.w_cluster, self.w_cluster_on, self.w_collapse]),
+            W.HBox([self.w_cluster, self.w_method, self.w_cluster_on, self.w_collapse]),
+            W.HBox([self.w_cocluster]),
             W.HBox([self.w_dim, self.w_coarser, self.w_finer]),
+        ])
+
+        # -- chains tab
+        self.w_state = W.Dropdown(options=[("(pick a state column)", None)] + [(c, c) for c in labels], value=None, description="State", style=st)
+        self.w_chain_by = W.Dropdown(options=[("(none)", None)] + [(c, c) for c in labels], value=None, description="Entity", style=st)
+        self.w_chain_time = W.Dropdown(options=[("(row order)", None)] + [(c.name, c.name) for c in prof if c.kind == DATETIME], value=None, description="Time", style=st)
+        self.w_chain_norm = W.Checkbox(value=False, description="row probabilities")
+        self.w_sequences = W.HTML()
+        chains_tab = W.VBox([
+            W.HTML("<i>Markov chains: what follows what within an entity. Rows = from, columns = to.</i>"),
+            W.HBox([self.w_state, self.w_chain_by, self.w_chain_time, self.w_chain_norm]),
+            self.w_sequences,
         ])
 
         # -- style tab
@@ -169,17 +213,24 @@ class Explorer:
         self.w_height = W.IntSlider(value=int(self.display.get("height", 340)), min=160, max=900, step=20, description="Height", style=st)
         style_tab = W.VBox([W.HBox([self.w_heat, self.w_totals, self.w_bars, self.w_compact]), W.HBox([self.w_width, self.w_height])])
 
-        # -- code tab, output
+        # -- code, profile, data, stats tabs; output; log panel
         self.w_code = W.HTML()
         self.w_out = W.HTML()
         self.w_status = W.HTML()
+        self.w_log = W.HTML()
         self.w_profile = W.HTML("<pre style='font-size:11px'>" + _html.escape(self._profile.summary().to_string(index=False)) + "</pre>")
+        self.w_data = W.HTML()
+        self.w_stats = W.HTML()
+        self.w_stats_btn = W.Button(description="Refresh stats", icon="clock-o")
+        stats_tab = W.VBox([W.HTML("<i>The seven costliest kinds of step so far (wall time, CPU time, peak memory delta).</i>"), self.w_stats_btn, self.w_stats])
 
-        tabs = W.Tab(children=[layout_tab, hist_tab, slice_tab, reduce_tab, style_tab, self.w_code, self.w_profile])
-        for i, t in enumerate(["Layout", "Histogram", "Slicers", "Reduce & cluster", "Style", "Code", "Profile"]):
-            tabs.set_title(i, t)
+        self.tabs = W.Tab(children=[layout_tab, hist_tab, slice_tab, reduce_tab, chains_tab, style_tab, self.w_code, self.w_profile, self.w_data, stats_tab])
+        for i, t in enumerate(["Layout", "Histogram", "Slicers", "Reduce & cluster", "Chains", "Style", "Code", "Profile", "Data", "Stats"]):
+            self.tabs.set_title(i, t)
         top = W.HBox([self.w_mode, self.w_best, self.w_suggest_btn, self.w_suggest, self.w_undo, self.w_reset])
-        self.box = W.VBox([top, tabs, self.w_status, self.w_out])
+        self.box = W.VBox([top, self.tabs, self.w_status, self.w_out, W.HTML("<b style='font-size:11px;color:#666'>log</b>"), self.w_log])
+        self._refresh_data_tab()
+        self._refresh_log()
 
         # -- wiring
         self.w_mode.observe(self._on_mode, names="value")
@@ -202,10 +253,13 @@ class Explorer:
         self.w_top_col.observe(self._on_slicers, names="value")
         self.w_top_n.observe(self._on_slicers, names="value")
         self.w_clear.on_click(lambda _: self._act(self._clear_slices))
-        for w in (self.w_sample, self.w_cluster, self.w_cluster_on, self.w_collapse):
+        for w in (self.w_sample, self.w_cluster, self.w_method, self.w_cluster_on, self.w_collapse, self.w_cocluster):
             w.observe(self._on_reduce, names="value")
         self.w_coarser.on_click(lambda _: self._act(lambda: self._step(-1)))
         self.w_finer.on_click(lambda _: self._act(lambda: self._step(+1)))
+        for w in (self.w_state, self.w_chain_by, self.w_chain_time, self.w_chain_norm):
+            w.observe(self._on_chain, names="value")
+        self.w_stats_btn.on_click(lambda _: self._refresh_stats())
 
     # ------------------------------------------------------------------ recipe -> view
 
@@ -213,12 +267,14 @@ class Explorer:
         return {
             "spec": dict(self.spec), "slices": list(self.slices), "mode": self.mode, "hist": dict(self.hist),
             "reduce": dict(self.reduce), "display": dict(self.display), "options": self.options, "refit": self.refit_sliced,
+            "chain": dict(self.chain),
         }
 
     def _restore(self, snap: Dict[str, Any]) -> None:
         self.spec, self.slices, self.mode = dict(snap["spec"]), list(snap["slices"]), snap["mode"]
         self.hist, self.reduce, self.display = dict(snap["hist"]), dict(snap["reduce"]), dict(snap["display"])
         self.options, self.refit_sliced = snap["options"], snap["refit"]
+        self.chain = dict(snap.get("chain", self.chain))
         self._sync_recipe_widgets()
 
     def _sync_recipe_widgets(self) -> None:
@@ -232,6 +288,9 @@ class Explorer:
             self.w_on.value, self.w_by.value, self.w_nbins.value = h.get("on"), h.get("by"), int(h.get("bins") or 0)
             self.w_sample.value, self.w_cluster.value = r.get("sample"), r.get("cluster")
             self.w_cluster_on.value, self.w_collapse.value = r.get("cluster_on"), bool(r.get("collapse"))
+            self.w_method.value, self.w_cocluster.value = r.get("method", "kmeans"), r.get("cocluster")
+            c = self.chain
+            self.w_state.value, self.w_chain_by.value, self.w_chain_time.value, self.w_chain_norm.value = c.get("state"), c.get("by"), c.get("time"), bool(c.get("normalize"))
             self.w_stacked.value, self.w_density.value = bool(d.get("stacked")), bool(d.get("density", True))
             self.w_logy.value, self.w_heat.value = bool(d.get("log_y")), str(d.get("heat", "table"))
             self.w_totals.value, self.w_bars.value, self.w_compact.value = bool(d.get("totals")), bool(d.get("bars")), bool(d.get("compact"))
@@ -263,13 +322,16 @@ class Explorer:
             self.w_status.value = f"<span style='color:#b00020'>{_html.escape(type(e).__name__)}: {_html.escape(str(e))}</span>"
 
     def _root(self) -> View:
-        src = self._source
         n = self.reduce["sample"]
-        key = (id(src), n, repr(self.spec), repr(self.options))
+        key = (n, repr(self.spec), repr(self.options))
         if key not in self._root_cache:
-            if n and n < len(src):
-                src = src.sample(int(n), random_state=self.options.seed).sort_index()
-            self._root_cache[key] = View.fit(src, options=self.options, **self.spec)
+            base = self._root_view
+            if n and n < len(base.data):
+                base = base.sample(int(n), seed=self.options.seed)
+            if base.paged is not None and not n:
+                self._root_cache[key] = View.fit(base.paged, options=self.options, **self.spec)
+            else:
+                self._root_cache[key] = View.fit(base.source, options=self.options, **self.spec)
         return self._root_cache[key]
 
     def build(self) -> View:
@@ -286,9 +348,22 @@ class Explorer:
                 v = v._clone(filters=v.filters + (payload,))
         if self.refit_sliced or (self.slices and v._layout_stale()):
             v = v.refit()
+        if self.mode == CHAINS:
+            c = self.chain
+            if not c.get("state"):
+                raise ValueError("Chains: pick a state column in the Chains tab")
+            from . import chains as _chains
+
+            v = _chains(v.data, c["state"], by=c.get("by"), time=c.get("time"), normalize=bool(c.get("normalize")),
+                        max_rows=self.options.max_rows, max_cols=self.options.max_cols)
+            self._refresh_sequences(c)
+            return v.style(**{k: x for k, x in self.display.items() if k != "heat"})
         k = self.reduce["cluster"]
         if k is not None:
-            v = v.cluster(None if k == "auto" else int(k), on=self.reduce["cluster_on"], collapse=bool(self.reduce["collapse"]))
+            v = v.cluster(None if k == "auto" else int(k), on=self.reduce["cluster_on"], method=self.reduce.get("method", "kmeans"),
+                          collapse=bool(self.reduce["collapse"]))
+        if self.reduce.get("cocluster"):
+            v = v.cocluster(method=self.reduce["cocluster"])
         if self.mode == HIST:
             h = self.hist
             if h["on"] or h["by"] or h["bins"]:
@@ -322,12 +397,20 @@ class Explorer:
                 lines.append(f"# slice: {payload.label}")
         if self.refit_sliced:
             lines.append("v = v.refit()")
+        if self.mode == CHAINS:
+            c = {k: x for k, x in self.chain.items() if x}
+            state = c.pop("state", None)
+            lines.append(f"v = p2h.chains(v.data, {state!r}{', ' if c else ''}{_kw(c)})")
         if self.reduce["cluster"] is not None:
             k = self.reduce["cluster"]
             kw = {"on": self.reduce["cluster_on"]} if self.reduce["cluster_on"] else {}
+            if self.reduce.get("method", "kmeans") != "kmeans":
+                kw["method"] = self.reduce["method"]
             if self.reduce["collapse"]:
                 kw["collapse"] = True
             lines.append(f"v = v.cluster({'' if k == 'auto' else k}{', ' if kw and k != 'auto' else ''}{_kw(kw)})")
+        if self.reduce.get("cocluster"):
+            lines.append(f"v = v.cocluster(method={self.reduce['cocluster']!r})")
         if self.mode == HIST:
             h = {k: v for k, v in self.hist.items() if v}
             lines.append(f"v = v.histogram({_kw(h)})" if h else "v = v.toggle()")
@@ -340,17 +423,64 @@ class Explorer:
         return "\n".join(lines)
 
     def _rebuild(self) -> None:
-        self.view = self.build()
-        self.w_out.value = self.view.html()
+        with log.step("explorer", "rebuild") as st:
+            self.view = self.build()
+            self.w_out.value = self.view.html(title=False)  # the status line already shows it
+            st.detail = f"rebuild -> {self.view.layout.describe()}"
         self.w_status.value = f"<span style='color:#555;font-size:12px'>{_html.escape(self.view.title())}</span>"
         self.w_code.value = "<pre style='font-size:12px'>" + _html.escape(self.code()) + "</pre>"
         self._sync_widgets()
+        self._refresh_stats()
+
+    def _refresh_stats(self) -> None:
+        df = log.stats(7)
+        if df.empty:
+            self.w_stats.value = "<i>nothing logged yet</i>"
+            return
+        rows = "".join(
+            f"<tr><td style='padding:2px 8px'>{_html.escape(str(r.step))}</td><td style='text-align:right;padding:2px 8px'>{int(r.calls)}</td>"
+            f"<td style='text-align:right;padding:2px 8px'>{r.seconds:.2f}</td><td style='text-align:right;padding:2px 8px'>{r.cpu:.2f}</td>"
+            f"<td style='text-align:right;padding:2px 8px'>{r.mem_mb:+.0f}</td><td style='padding:2px 8px;color:#666'>{_html.escape(str(r.last_detail))[:70]}</td></tr>"
+            for r in df.itertuples()
+        )
+        self.w_stats.value = (
+            "<table style='font-size:12px;border-collapse:collapse'><tr style='background:#f5f6f8'><th style='padding:2px 8px;text-align:left'>step</th>"
+            "<th style='padding:2px 8px'>calls</th><th style='padding:2px 8px'>seconds</th><th style='padding:2px 8px'>cpu s</th>"
+            "<th style='padding:2px 8px'>peak MB</th><th style='padding:2px 8px;text-align:left'>last</th></tr>" + rows + "</table>"
+        )
+
+    def _refresh_data_tab(self) -> None:
+        sv = self._root_view.survey
+        if sv is None:
+            from ._survey import survey as _survey
+
+            try:
+                sv = _survey(self._source)
+            except Exception:  # noqa: BLE001
+                sv = None
+        if sv is None:
+            self.w_data.value = "<i>no survey available</i>"
+            return
+        paged = self._root_view.paged
+        head = f"<b>{'paged source' if paged else 'in memory'}</b><br>" + _html.escape(sv.summary()).replace("\n", "<br>")
+        self.w_data.value = f"<div style='font-size:12px;line-height:1.5'>{head}</div>"
+
+    def _refresh_sequences(self, c: Dict[str, Any]) -> None:
+        try:
+            seq = _sequences(self.view.data if self.view.mode != CHAINS else self._root().data, c["state"], by=c.get("by"), time=c.get("time"), length=3, n=8)
+        except Exception:  # noqa: BLE001
+            seq = None
+        if seq is None or seq.empty:
+            self.w_sequences.value = ""
+            return
+        rows = "".join(f"<tr><td style='padding:2px 8px'>{_html.escape(str(r.chain))}</td><td style='text-align:right;padding:2px 8px'>{int(r.count):,}</td><td style='text-align:right;padding:2px 8px'>{r.share:.1%}</td></tr>" for r in seq.itertuples())
+        self.w_sequences.value = "<div style='font-size:12px'><b>most frequent 3-step chains</b><table style='border-collapse:collapse'>" + rows + "</table></div>"
 
     def _sync_widgets(self) -> None:
         self._syncing = True
         try:
             lay = self.view.layout
-            self.w_mode.value = self.view.mode
+            self.w_mode.value = self.mode
             dims = [d.column for d in lay.dims]
             self.w_dim.options = dims
             if dims and self.w_dim.value not in dims:
@@ -486,7 +616,16 @@ class Explorer:
             self.reduce = {
                 "sample": self.w_sample.value, "cluster": self.w_cluster.value,
                 "cluster_on": self.w_cluster_on.value, "collapse": self.w_collapse.value,
+                "method": self.w_method.value, "cocluster": self.w_cocluster.value,
             }
+        self._act(go)
+
+    def _on_chain(self, change: Any) -> None:
+        def go() -> None:
+            self.chain = {"state": self.w_state.value, "by": self.w_chain_by.value, "time": self.w_chain_time.value,
+                          "normalize": bool(self.w_chain_norm.value)}
+            if self.chain["state"]:
+                self.mode = CHAINS
         self._act(go)
 
     def _step(self, direction: int) -> None:
@@ -508,6 +647,70 @@ class Explorer:
         self._restore(first)
         self._clear_slices()
 
+    # ------------------------------------------------------------------ static snapshot
+
+    def snapshot_html(self, *, active_tab: Optional[int] = None) -> str:
+        """A static HTML picture of the interface (for docs, screenshots, sharing).
+
+        Widgets are drawn as plain form elements with their current values; the output,
+        status line and log are the real thing.
+        """
+        tab = self.tabs.selected_index if active_tab is None else active_tab
+        if tab is None:
+            tab = 0
+
+        def render(w: Any) -> str:
+            name = type(w).__name__
+            if name in ("VBox", "HBox", "Box"):
+                direction = "column" if name == "VBox" else "row"
+                inner = "".join(render(c) for c in w.children)
+                return f"<div style='display:flex;flex-direction:{direction};flex-wrap:wrap;gap:6px;align-items:flex-start;margin:2px 0'>{inner}</div>"
+            if name == "Tab":
+                heads = "".join(
+                    f"<span style='padding:4px 10px;border:1px solid #ccc;border-bottom:{'none' if i == tab else '1px solid #ccc'};"
+                    f"background:{'#fff' if i == tab else '#f1f1f1'};font-weight:{600 if i == tab else 400}'>{_html.escape(w.get_title(i) or str(i))}</span>"
+                    for i in range(len(w.children))
+                )
+                body = render(w.children[tab]) if w.children else ""
+                return f"<div><div style='display:flex;gap:2px'>{heads}</div><div style='border:1px solid #ccc;padding:8px'>{body}</div></div>"
+            if name == "HTML":
+                return f"<div>{w.value}</div>"
+            desc = _html.escape(str(getattr(w, "description", "") or ""))
+            label = f"<label style='color:#555;margin-right:4px'>{desc}</label>" if desc else ""
+            if name == "Button":
+                return f"<button style='padding:3px 10px;border:1px solid #bbb;border-radius:3px;background:#f7f7f7'>{desc}</button>"
+            if name == "ToggleButtons":
+                btns = "".join(
+                    f"<span style='padding:3px 10px;border:1px solid #bbb;background:{'#4a7ebb' if v == w.value else '#f7f7f7'};color:{'#fff' if v == w.value else '#222'}'>{_html.escape(str(lab))}</span>"
+                    for lab, v in (w.options if isinstance(w.options[0], tuple) else [(o, o) for o in w.options])
+                )
+                return f"<span style='display:inline-flex'>{btns}</span>"
+            if name in ("Dropdown",):
+                opts = w.options if (w.options and isinstance(w.options[0], tuple)) else [(o, o) for o in w.options]
+                items = "".join(f"<option{' selected' if v == w.value else ''}>{_html.escape(str(lab))}</option>" for lab, v in opts[:60])
+                return f"<span>{label}<select>{items}</select></span>"
+            if name == "SelectMultiple":
+                opts = w.options if (w.options and isinstance(w.options[0], tuple)) else [(o, o) for o in w.options]
+                items = "".join(f"<option{' selected' if v in w.value else ''}>{_html.escape(str(lab))}</option>" for lab, v in opts[:60])
+                return f"<span>{label}<select multiple size='{min(6, max(2, len(opts)))}'>{items}</select></span>"
+            if name == "Checkbox":
+                return f"<label><input type='checkbox'{' checked' if w.value else ''}> {desc}</label>"
+            if name in ("IntSlider", "FloatSlider"):
+                return f"<span>{label}<input type='range' min='{w.min}' max='{w.max}' value='{w.value}'> <b>{w.value}</b></span>"
+            if name == "SelectionRangeSlider":
+                lo, hi = w.index
+                labs = [o[0] if isinstance(o, tuple) else str(o) for o in w.options]
+                return f"<span>{label}<input type='range' min='0' max='{len(labs) - 1}' value='{lo}'> <b>{_html.escape(labs[lo])} .. {_html.escape(labs[hi])}</b></span>"
+            if name == "Text":
+                return f"<span>{label}<input type='text' value='{_html.escape(w.value)}' placeholder='{_html.escape(w.placeholder or '')}' size='48'></span>"
+            return f"<span>{label}{_html.escape(str(getattr(w, 'value', '')))}</span>"
+
+        body = render(self.box)
+        return (
+            "<div style='font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:12px;"
+            f"max-width:1100px'>{body}</div>"
+        )
+
     # ------------------------------------------------------------------ display
 
     def _repr_mimebundle_(self, **kw: Any) -> Any:
@@ -521,8 +724,10 @@ class Explorer:
 
 def explore(data: Any, **fit_kwargs: Any) -> Explorer:
     """Open the interactive explorer on a frame/path/records or an existing :class:`View`."""
+    from . import fit as _fit  # package-level fit: surveys files/DuckDB and pages big sources
+
     ui_kw = {k: fit_kwargs.pop(k) for k in ("width", "height", "max_slicers") if k in fit_kwargs}
-    view = data if isinstance(data, View) else View.fit(load(data), **fit_kwargs)
+    view = data if isinstance(data, View) else _fit(data, **fit_kwargs)
     return Explorer(view, **ui_kw)
 
 

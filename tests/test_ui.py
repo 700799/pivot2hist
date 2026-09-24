@@ -95,3 +95,45 @@ def test_explore_accepts_view_and_records(fw):
     assert ex.view.slices == ["action=allow"] and "# slice: action=allow" in ex.code()
     ex2 = explore(fw.head(50).to_dict("records"), max_rows=5)
     assert ex2.view.pivot().shape[0] <= 5
+
+
+def test_explorer_log_stats_data_and_snapshot(ex):
+    assert "<div" in ex.w_log.value and len(ex._log_lines) > 0
+    assert "<table" in ex.w_stats.value
+    assert "in memory" in ex.w_data.value or "frame" in ex.w_data.value
+    html = ex.snapshot_html()
+    assert "<select" in html and "Reduce" in html and "<table" in html
+    ex.tabs.selected_index = 4
+    assert "Markov" in ex.snapshot_html()
+    ex.close()
+
+
+def test_explorer_cluster_methods_cocluster_chains(ex, fw):
+    ex.w_cluster.value = 2
+    ex.w_method.value = "dbscan"
+    assert ex.view.layout.rows[0].column == "cluster" and "method='dbscan'" in ex.code()
+    ex.w_cluster.value = None
+    ex.w_cocluster.value = "spectral"
+    assert ex.view.layout.rows[0].column == "block_r" and "cocluster(method='spectral')" in ex.code()
+    ex.w_cocluster.value = None
+    ex.w_state.value = "action"
+    assert ex.mode == "chains" and ex.view.layout.rows[0].column == "from"
+    assert "p2h.chains(v.data, 'action')" in ex.code() and "chains" in ex.w_sequences.value
+    ex.w_chain_norm.value = True
+    assert "normalize=True" in ex.code()
+    ex.w_mode.value = "pivot"
+    assert ex.view.layout.rows[0].column != "from"
+    ex.close()
+
+
+def test_explorer_on_paged_source(tmp_path):
+    pytest.importorskip("pyarrow")
+    path = tmp_path / "fw.parquet"
+    p2h.sample.firewall_logs(20_000, seed=4).to_parquet(path, index=False)
+    ex = explore(str(path), memory_budget_mb=2, max_rows=8, max_cols=4)
+    assert ex.view.paged is not None and "(paged" in ex.view.title() and "paged source" in ex.w_data.value
+    ex.w_slicers["action"][1].value = ("deny",)
+    assert " of ≈" in ex.view.title()
+    ex.w_sample.value = 1000
+    assert ex.view.paged is None and len(ex.view.source) == 1000
+    ex.close()

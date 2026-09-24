@@ -125,6 +125,7 @@ class Dim:
     top: Optional[int] = None  # categorical: top-N kept, rest -> "(other)"
     level: Optional[str] = None  # categorical: semantic drill level ("/24", "class", "host" ...)
     semantic: Optional[str] = None
+    keep: Optional[Tuple[Any, ...]] = None  # categorical: frozen kept values (paged sources, derived labels)
     order: str = "auto"
     quality: float = 1.0  # profiling preference, feeds the score
     entity: bool = False  # names an entity (ip, host, user ...): reads best as a row
@@ -159,6 +160,8 @@ class Dim:
             d["top"] = self.top
         if self.level is not None:
             d["level"] = self.level
+        if self.keep is not None:
+            d["keep"] = [str(k) for k in self.keep[:50]]
         return d
 
 
@@ -320,7 +323,7 @@ def materialize(df: pd.DataFrame, dim: Dim) -> pd.Series:
         return B.bucket_time(s, dim.freq or "D")
     if dim.is_coarse:
         s = S.bucket(s, dim.semantic or "", dim.level or "")
-    return B.categorize(s, top=dim.top, order=dim.order)
+    return B.categorize(s, top=dim.top, order=dim.order, keep=dim.keep)
 
 
 # --------------------------------------------------------------------------- measure
@@ -480,7 +483,7 @@ class _Evaluator:
         self._combos: Dict[Tuple, Tuple[np.ndarray, int, float]] = {}
 
     def _key(self, dim: Dim) -> Tuple:
-        return (dim.column, dim.kind, dim.top, dim.freq, dim.edges, dim.level)
+        return (dim.column, dim.kind, dim.top, dim.freq, dim.edges, dim.level, dim.keep)
 
     def codes(self, dim: Dim) -> np.ndarray:
         k = self._key(dim)
@@ -653,6 +656,10 @@ def _resolve_spec(spec: DimSpec, df: pd.DataFrame, prof: Profile, budget: int, o
             return Dim(col, "time", B.time_bucket_count(df[col], freq), freq=freq, quality=_prof_quality(cp),
                        entity=cp.entity_hint, position=cp.position, natural=cp.natural_levels)
         level = spec.pop("level", None)
+        if "keep" in spec:
+            keep = tuple(spec.pop("keep"))
+            return Dim(col, "categorical", len(keep) + 1, keep=keep, order=spec.pop("order", "keep"), quality=_prof_quality(cp),
+                       entity=cp.entity_hint, position=cp.position, natural=cp.natural_levels, level=level, semantic=cp.semantic if level else None)
         if "top" in spec:
             top = int(spec.pop("top"))
             sem = dict(level=level, semantic=cp.semantic) if level is not None else {}
@@ -910,8 +917,21 @@ def suggest_layouts(
 def effective_label(dim: Dim, materialized: pd.Series) -> str:
     """The dim's label, minus a "(top N)" tag when nothing was folded into "(other)"."""
     if dim.top is not None and B.OTHER not in materialized.cat.categories:
-        return dim.column
+        return dim.column if not dim.is_coarse else f"{dim.column} ({dim.level})"
     return dim.label
+
+
+def freeze(layout: Layout, df: pd.DataFrame) -> Layout:
+    """Pin every top-N dimension's kept values as seen in ``df`` (a sample), so other
+    chunks of the same source fold into "(other)" identically."""
+    def fz(d: Dim) -> Dim:
+        if d.kind != "categorical" or d.top is None or d.keep is not None or d.column not in df.columns:
+            return d
+        cats = list(materialize(df, d).cat.categories)
+        keep = tuple(c for c in cats if c not in (B.OTHER, B.NULL))
+        return replace(d, keep=keep, order="keep")
+
+    return Layout(tuple(fz(d) for d in layout.rows), tuple(fz(d) for d in layout.cols), layout.values, layout.agg)
 
 
 

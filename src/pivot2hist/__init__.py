@@ -12,6 +12,8 @@ Quick start::
     v.suggest()                   # alternative layouts
     v.cluster(4)                  # group similar rows
     p2h.explore(df)               # Jupyter menus (ipywidgets)
+    p2h.fit("huge.parquet")       # surveyed, fitted on a sample, aggregated page by page
+    p2h.verbose(); p2h.stats(7)   # scrolling step log; the seven costliest steps
 """
 from __future__ import annotations
 
@@ -22,15 +24,38 @@ import pandas as pd
 
 from . import sample
 from ._binning import RULES, bin_count, bin_edges, bin_labels, kde
-from ._cluster import cluster_frame, cluster_rows, kmeans
+from ._chains import sequences, steady_state, transition_matrix, transitions
+from ._cluster import COMETHODS, METHODS, cluster_frame, cluster_rows, cocluster, dbscan, kmeans
 from ._fit import AGGS, DEFAULT_WEIGHTS, Dim, DimSpec, FitOptions, Layout, build_table, fit_layout, suggest_layouts
 from ._io import load
+from ._log import log, stats, verbose
 from ._profile import ColumnProfile, Profile
 from ._profile import profile as _profile
 from ._semantic import HIERARCHY, infer_semantic
-from ._view import HIST, PIVOT, Filter, View
+from ._survey import Machine, PagedSource, Plan, Survey, downcast, load_planned, survey
+from ._view import HIST, PIVOT, Derived, Filter, View
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
+
+_PLANNED_KEYS = ("memory_budget_mb", "mode", "columns", "query", "table", "sample_rows", "page_rows")
+
+
+def _needs_plan(data: Any) -> bool:
+    """Paths and DuckDB sources go through the survey; frames and records load directly."""
+    if isinstance(data, (str, bytes)) or hasattr(data, "__fspath__"):
+        return True
+    return type(data).__name__ == "DuckDBPyConnection"
+
+
+def _load_for_fit(data: Any, opts: dict):
+    """Split fit() kwargs into loading knobs and FitOptions; return (frame_or_paged, survey)."""
+    planned = {k: opts.pop(k) for k in _PLANNED_KEYS if k in opts}
+    if _needs_plan(data) or planned:
+        if not _needs_plan(data) and planned.get("mode", "auto") == "auto" and "memory_budget_mb" not in planned:
+            return load(data), None
+        frame, sv = load_planned(data, **planned)
+        return frame, sv
+    return load(data), None
 
 
 def fit(
@@ -43,14 +68,21 @@ def fit(
     options: Optional[FitOptions] = None,
     **opts: Any,
 ) -> View:
-    """Auto-fit ``data`` (frame, path, records ...) into a pivot :class:`View`.
+    """Auto-fit ``data`` (frame, path, records, ``duckdb://`` URL ...) into a pivot :class:`View`.
 
     Fix any of ``rows``/``cols``/``values``/``agg`` and the rest is chosen for you.
     Keyword options (``max_rows``, ``max_cols``, ``layers``, ``aspect``, ``bins``,
     ``scale`` ...) are :class:`FitOptions` fields.
+
+    Files and DuckDB sources are surveyed first (rows, size on disk, estimated memory
+    against the machine's RAM); too-big data is fitted on a sample and aggregated page by
+    page. Loading knobs: ``memory_budget_mb`` (default: half the free RAM), ``mode``
+    (``"auto"`` | ``"full"`` | ``"downcast"`` | ``"sample"`` | ``"paged"``), ``columns``,
+    ``query`` / ``table`` for DuckDB, ``sample_rows``, ``page_rows``.
     """
-    df = load(data)
-    return View.fit(df, rows=rows, cols=cols, values=values, agg=agg, options=options, **opts)
+    frame, sv = _load_for_fit(data, opts)
+    v = View.fit(frame, rows=rows, cols=cols, values=values, agg=agg, options=options, **opts)
+    return v if sv is None else View(frame, v.layout, options=v.options, spec=v._spec, survey=sv)
 
 
 pivot = fit
@@ -69,8 +101,10 @@ def histogram(
     **opts: Any,
 ) -> View:
     """A histogram :class:`View` of ``data`` (``toggle()`` gives the matching pivot)."""
-    df = load(data)
-    base = View.fit(df, options=options, **opts)
+    frame, sv = _load_for_fit(data, opts)
+    base = View.fit(frame, options=options, **opts)
+    if sv is not None:
+        base = View(frame, base.layout, options=base.options, spec=base._spec, survey=sv)
     if on is None and by is None and values is None and bins is None and scale is None:
         return base.toggle()
     return base.histogram(on, by, bins=bins, values=values, agg=agg, scale=scale)
@@ -94,18 +128,53 @@ def explore(data: Any, **kw: Any) -> Any:
     return _explore(data, **kw)
 
 
-def cluster(data: Any, columns: Optional[Sequence[str]] = None, k: Optional[int] = None, *, name: str = "cluster") -> pd.DataFrame:
-    """``data`` with an extra k-means ``cluster`` column over numeric ``columns`` (default: all)."""
+def cluster(data: Any, columns: Optional[Sequence[str]] = None, k: Optional[int] = None, *, method: str = "kmeans", name: str = "cluster") -> pd.DataFrame:
+    """``data`` with an extra ``cluster`` column over numeric ``columns`` (default: all).
+
+    ``method``: ``"kmeans"`` (auto k), ``"dbscan"`` or ``"hdbscan"`` (outliers -> ``noise``)."""
     df = load(data)
     out = df.copy()
-    out[name] = cluster_frame(df, columns, k, name=name)
+    out[name] = cluster_frame(df, columns, k, method=method, name=name)
     return out
 
 
+def chains(
+    data: Any,
+    state: str,
+    *,
+    by: Optional[Union[str, Sequence[str]]] = None,
+    time: Optional[str] = None,
+    order: int = 1,
+    normalize: bool = False,
+    **opts: Any,
+) -> View:
+    """Markov transition matrix of ``state`` as a :class:`View` (rows = from, columns = to).
+
+    ``by`` keeps sequences inside an entity (user, source IP); ``time`` orders them;
+    ``order=2`` conditions on the previous two states; ``normalize`` shows row
+    probabilities instead of counts. Everything else (toggle, slice, cluster, cocluster,
+    style) works as on any pivot. See :func:`sequences` for the most frequent chains.
+    """
+    df = load(data)
+    long = transitions(df, state, by=by, time=time, order=order)
+    if long.empty:
+        raise ValueError("no transitions found (need at least two consecutive states per group)")
+    values, agg = ("prob", "sum") if normalize else ("count", "sum")
+    max_states = max(opts.pop("max_rows", 40), opts.pop("max_cols", 12))
+    v = View.fit(long, rows=[{"column": "from", "top": max_states - 1}] if long["from"].nunique() > max_states else ["from"],
+                 cols=[{"column": "to", "top": max_states - 1}] if long["to"].nunique() > max_states else ["to"],
+                 values=values, agg=agg, max_rows=max_states, max_cols=max_states, **opts)
+    return v.style(heat="row" if normalize else "table")
+
+
 __all__ = [
-    "fit", "pivot", "histogram", "profile", "load", "suggest", "explore", "cluster",
-    "View", "Layout", "Dim", "FitOptions", "Filter", "Profile", "ColumnProfile",
+    "fit", "pivot", "histogram", "profile", "load", "suggest", "explore", "cluster", "chains",
+    "survey", "load_planned", "downcast", "stats", "verbose", "log",
+    "sequences", "transitions", "transition_matrix", "steady_state",
+    "View", "Layout", "Dim", "FitOptions", "Filter", "Derived", "Profile", "ColumnProfile",
+    "Survey", "Plan", "Machine", "PagedSource",
     "build_table", "fit_layout", "suggest_layouts", "bin_edges", "bin_count", "bin_labels", "kde",
-    "cluster_frame", "cluster_rows", "kmeans", "infer_semantic", "HIERARCHY", "DEFAULT_WEIGHTS",
+    "cluster_frame", "cluster_rows", "cocluster", "kmeans", "dbscan", "METHODS", "COMETHODS",
+    "infer_semantic", "HIERARCHY", "DEFAULT_WEIGHTS",
     "RULES", "AGGS", "PIVOT", "HIST", "sample", "__version__",
 ]

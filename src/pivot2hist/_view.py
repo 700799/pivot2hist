@@ -13,13 +13,20 @@ import numpy as np
 import pandas as pd
 from pandas.api import types as pdt
 
+from dataclasses import replace as _replace
+
 from . import _binning as B
-from ._cluster import cluster_frame, cluster_rows
-from ._fit import COUNT, Dim, DimSpec, FitOptions, Layout, build_table, default_agg, fit_layout, materialize, plan_dim
+from ._cluster import METHODS, cluster_frame, cluster_rows, cocluster as _cocluster
+from ._fit import COUNT, Dim, DimSpec, FitOptions, Layout, build_table, default_agg, fit_layout, freeze, materialize, plan_dim
 from ._fit import _resolve_axis, suggest_layouts
 from ._html import hist_svg, pivot_html
+from ._log import log
+from ._log import stats as _log_stats
 from ._profile import BOOLEAN, CATEGORICAL, DATETIME, NUMERIC, Profile, profile
 from ._render import render_hist, render_pivot
+from ._survey import PagedSource, Survey
+
+EXACT_AGGS = ("sum", "count", "min", "max", "mean")
 
 PIVOT = "pivot"
 HIST = "hist"
@@ -209,6 +216,33 @@ def make_filter(column: str, spec: Any, df: pd.DataFrame) -> Filter:
 # --------------------------------------------------------------------------- view
 
 
+@dataclass(frozen=True)
+class Derived:
+    """A column computed on the fly: cluster/block labels looked up from a row key, or an
+    index-aligned series. Never written into the source frame, so it works page by page."""
+
+    name: str
+    dims: Tuple[Dim, ...] = ()
+    lookup: Optional[Dict[Any, Any]] = None
+    categories: Tuple[Any, ...] = ()
+    series: Optional[pd.Series] = None
+
+    def compute(self, df: pd.DataFrame) -> pd.Series:
+        if self.series is not None:
+            vals = self.series.reindex(df.index)
+        else:
+            keys = [materialize(df, d).astype(object) for d in self.dims]
+            if len(keys) == 1:
+                vals = keys[0].map(self.lookup or {})
+            else:
+                tuples = pd.Series(list(zip(*[k.to_numpy() for k in keys])), index=df.index)
+                vals = tuples.map(self.lookup or {})
+        return pd.Series(pd.Categorical(vals, categories=list(self.categories), ordered=True), index=df.index, name=self.name)
+
+    def dim(self) -> Dim:
+        return Dim(self.name, "categorical", len(self.categories), keep=tuple(self.categories), order="keep", natural=len(self.categories), quality=1.0)
+
+
 class View:
     """A pivot table (or its histogram twin) over a frame, with slices.
 
@@ -227,10 +261,15 @@ class View:
         parent: Optional["View"] = None,
         spec: Optional[Mapping[str, Any]] = None,
         display: Optional[Mapping[str, Any]] = None,
+        derived: Optional[Mapping[str, Derived]] = None,
+        survey: Optional[Survey] = None,
     ):
         if mode not in MODES:
             raise ValueError(f"mode must be one of {MODES}")
-        self._source = data
+        self._paged: Optional[PagedSource] = data if isinstance(data, PagedSource) else None
+        self._source: pd.DataFrame = data.sample if isinstance(data, PagedSource) else data
+        self._survey = survey if survey is not None else (data.survey if isinstance(data, PagedSource) else None)
+        self._derived: Dict[str, Derived] = dict(derived or {})
         self._layout = layout
         self._options = options or FitOptions()
         self._mode = mode
@@ -256,14 +295,20 @@ class View:
         **opts: Any,
     ) -> "View":
         options = (options or FitOptions()).replace(**opts) if opts else (options or FitOptions())
-        layout = fit_layout(data, options, rows=rows, cols=cols, values=values, agg=agg)
+        frame = data.sample if isinstance(data, PagedSource) else data
+        with log.step("fit", f"{len(frame):,} rows x {frame.shape[1]} cols") as st:
+            layout = fit_layout(frame, options, rows=rows, cols=cols, values=values, agg=agg)
+            st.detail += f" -> {layout.describe()}"
+        if isinstance(data, PagedSource):
+            layout = freeze(layout, frame)
         spec = {"rows": rows, "cols": cols, "values": values, "agg": agg}
         return cls(data, layout, options=options, mode=mode, spec=spec)
 
     def _clone(self, **changes: Any) -> "View":
         kw = dict(
-            data=self._source, layout=self._layout, options=self._options, mode=self._mode,
-            filters=self._filters, parent=self._parent, spec=self._spec, display=self._display,
+            data=self._paged if self._paged is not None else self._source, layout=self._layout, options=self._options,
+            mode=self._mode, filters=self._filters, parent=self._parent, spec=self._spec, display=self._display,
+            derived=self._derived, survey=self._survey,
         )
         kw.update(changes)
         return View(**kw)
@@ -294,20 +339,42 @@ class View:
 
     @property
     def source(self) -> pd.DataFrame:
-        """The full, unsliced frame."""
+        """The full, unsliced frame (for a paged source: its fitting sample)."""
         return self._source
 
     @property
+    def paged(self) -> Optional[PagedSource]:
+        """The paged source behind this view, or ``None`` when the data is in memory."""
+        return self._paged
+
+    @property
+    def survey(self) -> Optional[Survey]:
+        """Size survey of the source, when it was loaded through :func:`pivot2hist.fit`."""
+        return self._survey
+
+    @property
+    def derived(self) -> Dict[str, Derived]:
+        return dict(self._derived)
+
+    def _with_derived(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Add derived columns in insertion order (a later one may build on an earlier one)."""
+        for name, d in self._derived.items():
+            if name not in df.columns:
+                df = df.assign(**{name: d.compute(df)})
+        return df
+
+    def _mask(self, df: pd.DataFrame) -> np.ndarray:
+        m = np.ones(len(df), dtype=bool)
+        for f in self._filters:
+            m &= f.mask(df)
+        return m
+
+    @property
     def data(self) -> pd.DataFrame:
-        """The sliced frame."""
+        """The sliced frame (for a paged source: the sliced sample)."""
         if "data" not in self._cache:
-            if not self._filters:
-                self._cache["data"] = self._source
-            else:
-                m = np.ones(len(self._source), dtype=bool)
-                for f in self._filters:
-                    m &= f.mask(self._source)
-                self._cache["data"] = self._source[m]
+            base = self._with_derived(self._source)
+            self._cache["data"] = base if not self._filters else base[self._mask(base)]
         return self._cache["data"]
 
     @property
@@ -332,15 +399,115 @@ class View:
     def pivot(self) -> pd.DataFrame:
         """The pivot table (only observed level combinations)."""
         if "pivot" not in self._cache:
-            self._cache["pivot"] = build_table(self.data, self._layout, observed=True)
+            with log.step("pivot", self._layout.describe()) as st:
+                if self._paged is not None:
+                    self._cache["pivot"] = self._paged_table(observed=True)
+                else:
+                    self._cache["pivot"] = build_table(self.data, self._layout, observed=True)
+                st.detail += f" -> {self._cache['pivot'].shape[0]} x {self._cache['pivot'].shape[1]}"
         return self._cache["pivot"]
 
     def bins(self) -> pd.DataFrame:
         """The histogram table: every planned bin/level on the row axis, series as columns."""
         if "bins" not in self._cache:
-            t = build_table(self.data, self._layout, observed=False)
-            self._cache["bins"] = self._trim(t)
+            with log.step("bins", self._layout.describe()):
+                if self._paged is not None:
+                    t = self._paged_table(observed=False)
+                else:
+                    t = build_table(self.data, self._layout, observed=False)
+                self._cache["bins"] = self._trim(t)
         return self._cache["bins"]
+
+    @property
+    def approximate(self) -> bool:
+        """True when a paged view had to compute its measure on the sample (median, std, nunique)."""
+        return bool(self._cache.get("approx", False)) or (
+            self._paged is not None and self._layout.values is not None and self._layout.agg not in EXACT_AGGS
+        )
+
+    def _paged_table(self, *, observed: bool) -> pd.DataFrame:
+        """Aggregate page by page. Exact for count/sum/min/max/mean; sample-based otherwise."""
+        assert self._paged is not None
+        layout = self._layout
+        agg = layout.agg if layout.values is not None else "sum"
+        if layout.values is not None and agg not in EXACT_AGGS:
+            self._cache["approx"] = True
+            log.info("pivot", f"{agg} cannot be combined across pages: computed on the {len(self.data):,}-row sample")
+            return build_table(self.data, layout, observed=observed)
+        mean = layout.values is not None and agg == "mean"
+        sum_layout = _replace(layout, agg="sum") if mean else layout
+        cnt_layout = _replace(layout, agg="count") if mean else None
+        sums: List[pd.DataFrame] = []
+        cnts: List[pd.DataFrame] = []
+        seen = 0
+        for page in self._paged.pages():
+            page = self._with_derived(page)
+            if self._filters:
+                page = page[self._mask(page)]
+            seen += len(page)
+            if page.empty:
+                continue
+            sums.append(build_table(page, sum_layout, observed=observed))
+            if cnt_layout is not None:
+                cnts.append(build_table(page, cnt_layout, observed=observed))
+        self._cache["paged_rows"] = seen
+        if not sums:
+            return build_table(self.data.iloc[0:0], layout, observed=observed)
+        how = {"sum": "sum", "count": "sum", "min": "min", "max": "max", "mean": "sum"}[agg]
+        total = self._combine(sums, how)
+        if mean:
+            n = self._combine(cnts, "sum")
+            total = total / n.replace(0, np.nan).reindex_like(total)
+        return self._reorder(total)
+
+    @staticmethod
+    def _combine(parts: List[pd.DataFrame], how: str) -> pd.DataFrame:
+        big = pd.concat(parts, axis=0, sort=False)
+        if how == "sum":
+            big = big.fillna(0)
+        levels = list(range(big.index.nlevels))
+        out = big.groupby(level=levels, observed=True, sort=False).agg(how)
+        return out
+
+    def _reorder(self, table: pd.DataFrame) -> pd.DataFrame:
+        """Order index/columns the way the sample's categories are ordered (unseen labels last)."""
+        def order_for(dims: Tuple[Dim, ...], index: pd.Index) -> pd.Index:
+            if not dims or len(index) == 0:
+                return index
+            ranks = []
+            for d in dims:
+                cats = list(materialize(self.data, d).cat.categories) if d.column in self.data.columns else []
+                ranks.append({c: i for i, c in enumerate(cats)})
+            def key(t: Any) -> Tuple:
+                tup = t if isinstance(t, tuple) else (t,)
+                return tuple(ranks[i].get(v, len(ranks[i]) + 1) if i < len(ranks) else 0 for i, v in enumerate(tup))
+            return pd.Index(sorted(index, key=key), name=index.name) if not isinstance(index, pd.MultiIndex) else pd.MultiIndex.from_tuples(sorted(index, key=key), names=index.names)
+
+        table = table.reindex(order_for(self._layout.rows, table.index))
+        if self._layout.cols:
+            table = table.reindex(columns=order_for(self._layout.cols, table.columns))
+        return table
+
+    def materialize(self, max_rows: Optional[int] = None) -> "View":
+        """Pull a paged source into memory (sliced rows only) and return an ordinary view."""
+        if self._paged is None:
+            return self
+        parts: List[pd.DataFrame] = []
+        got = 0
+        with log.step("materialize", "paged -> memory") as st:
+            for page in self._paged.pages():
+                if self._filters:
+                    page = page[self._mask(self._with_derived(page))]
+                parts.append(page)
+                got += len(page)
+                if max_rows is not None and got >= max_rows:
+                    break
+            df = pd.concat(parts, ignore_index=True) if parts else self._source.iloc[0:0]
+            if max_rows is not None:
+                df = df.head(max_rows)
+            st.detail += f": {len(df):,} rows"
+        return View(df, self._layout, options=self._options, mode=self._mode, filters=(), parent=None,
+                    spec=self._spec, display=self._display, derived=self._derived, survey=self._survey)
 
     def _trim(self, t: pd.DataFrame) -> pd.DataFrame:
         if t.empty:
@@ -393,8 +560,9 @@ class View:
             kwargs = {args[0]: args[1], **kwargs}
         elif args:
             raise TypeError("slice() takes a query string, (column, value) or column=value keywords")
+        base = self._with_derived(self._source) if any(c in self._derived for c in kwargs) else self._source
         for col, spec in kwargs.items():
-            new.append(make_filter(col, spec, self._source))
+            new.append(make_filter(col, spec, base))
         v = self._clone(filters=self._filters + tuple(new))
         if refit is True or (refit == "auto" and v._layout_stale()):
             v = v.refit()
@@ -456,7 +624,7 @@ class View:
         return self.slice(*args, refit=True, **kwargs)
 
     def sample(self, n: Optional[int] = None, frac: Optional[float] = None, *, seed: int = 0) -> "View":
-        """Reduce size: the same view over a random sample of the sliced rows."""
+        """Reduce size: the same view over a random sample of the sliced rows (in memory)."""
         data = self.data
         if n is None and frac is None:
             n = min(len(data), 10_000)
@@ -465,7 +633,8 @@ class View:
             src = data.sample(n=n, random_state=seed)
         else:
             src = data.sample(frac=float(frac), random_state=seed)
-        return self._clone(data=src.sort_index())
+        return View(src.sort_index(), self._layout, options=self._options, mode=self._mode, filters=self._filters,
+                    parent=None, spec=self._spec, display=self._display, derived={}, survey=self._survey)
 
     def _dim_for(self, column: str) -> Tuple[str, int, Dim]:
         for axis in ("rows", "cols"):
@@ -548,55 +717,86 @@ class View:
 
     # ------------------------------------------------------------------ clustering
 
+    def _fresh_name(self, name: str) -> str:
+        taken = set(self._source.columns) | set(self._derived)
+        if name not in taken:
+            return name
+        i = 2
+        while f"{name}{i}" in taken:
+            i += 1
+        return f"{name}{i}"
+
     def cluster(
         self,
         k: Optional[int] = None,
         *,
         on: Optional[Union[str, Sequence[str]]] = None,
+        method: str = "kmeans",
         collapse: bool = False,
         name: str = "cluster",
         normalize: str = "row",
     ) -> "View":
-        """Group rows with k-means and use the groups as a dimension.
+        """Group rows into clusters and use the groups as a dimension.
 
         With ``on=None`` the *rows of the current pivot* are clustered by the shape of their
         column profile (ports that get denied alike, hosts with the same method mix ...).
         The cluster becomes the outer row level, or the only row level with
         ``collapse=True`` (reduce size). With ``on`` = numeric column(s), the *records* are
-        clustered on those columns instead. ``k`` defaults to a silhouette-chosen value.
+        clustered on those columns instead (in-memory data only).
+
+        ``method`` is ``"kmeans"`` (``k`` defaults to a silhouette-chosen value),
+        ``"dbscan"`` (density, automatic radius, outliers become ``noise``) or
+        ``"hdbscan"`` (scikit-learn's HDBSCAN when installed, else DBSCAN).
         """
-        data = self.data
-        if name in self._source.columns:
-            i = 2
-            while f"{name}{i}" in self._source.columns:
-                i += 1
-            name = f"{name}{i}"
+        if method not in METHODS:
+            raise ValueError(f"unknown method {method!r}; use one of {METHODS}")
+        name = self._fresh_name(name)
         if on is None:
             table = self.pivot()
             if table.shape[0] < 3:
                 raise ValueError("need at least 3 pivot rows to cluster")
-            labels, _ = cluster_rows(table, k, normalize=normalize, seed=self._options.seed)
-            keys = [materialize(data, d).astype(object) for d in self._layout.rows]
+            labels, _ = cluster_rows(table, k, method=method, normalize=normalize, seed=self._options.seed)
             lookup = dict(zip(table.index, labels.tolist()))
-            if len(keys) == 1:
-                lab = keys[0].map(lookup)
-            else:
-                tuples = pd.Series(list(zip(*[kk.to_numpy() for kk in keys])), index=data.index)
-                lab = tuples.map(lookup)
-            lab = pd.Series(pd.Categorical(lab, categories=list(labels.cat.categories), ordered=True), index=data.index)
-            k_found = len(labels.cat.categories)
-            group = Dim(name, "categorical", k_found, order="natural", natural=k_found, quality=1.0)
+            der = Derived(name, dims=tuple(self._layout.rows), lookup=lookup, categories=tuple(labels.cat.categories))
             # nested under the cluster, the existing rows are partitioned, not multiplied
-            rows: List[Any] = [group] + ([] if collapse else list(self._layout.rows))
+            rows: List[Any] = [der.dim()] + ([] if collapse else list(self._layout.rows))
         else:
+            if self._paged is not None:
+                raise ValueError("record clustering needs the data in memory: use .sample() or .materialize() first")
             cols = [on] if isinstance(on, str) else list(on)
-            lab = cluster_frame(data, cols, k, seed=self._options.seed, name=name)
-            rows = [name]
-        src = self._source.copy()
-        src[name] = lab.astype(object).reindex(src.index)
-        src[name] = pd.Categorical(src[name], categories=list(lab.cat.categories), ordered=True)
-        base = View(src, self._layout, options=self._options, mode=self._mode, filters=self._filters, spec=self._spec, display=self._display)
+            lab = cluster_frame(self.data, cols, k, method=method, seed=self._options.seed, name=name)
+            der = Derived(name, series=lab, categories=tuple(lab.cat.categories))
+            rows = [der.dim()]
+        base = self._clone(derived={**self._derived, name: der})
         return base.relayout(rows=rows, cols=list(self._layout.cols), **self._measure_spec())
+
+    def cocluster(self, k: Optional[int] = None, *, method: str = "spectral", nest: bool = True, name: str = "block") -> "View":
+        """Group rows *and* columns into matching blocks (spectral co-clustering or Markov
+        clustering of the bipartite row-column graph).
+
+        With ``nest=True`` a block level is added to both axes; with ``nest=False`` the axes
+        are only reordered so the blocks show up along the diagonal of the heatmap.
+        """
+        table = self.pivot()
+        rl, cl = _cocluster(table, k, method=method, seed=self._options.seed)
+        rname, cname = self._fresh_name(f"{name}_r"), self._fresh_name(f"{name}_c")
+        der_r = Derived(rname, dims=tuple(self._layout.rows), lookup=dict(zip(table.index, rl.tolist())), categories=tuple(rl.cat.categories))
+        der_c = Derived(cname, dims=tuple(self._layout.cols), lookup=dict(zip(table.columns, cl.tolist())), categories=tuple(cl.cat.categories))
+        if nest or len(self._layout.rows) > 1 or len(self._layout.cols) > 1:
+            base = self._clone(derived={**self._derived, rname: der_r, cname: der_c})
+            return base.relayout(rows=[der_r.dim()] + list(self._layout.rows), cols=[der_c.dim()] + list(self._layout.cols), **self._measure_spec())
+        # reorder only: freeze each axis' single dimension in block order
+        def ordered(labels: pd.Series) -> Tuple[Any, ...]:
+            codes = labels.cat.codes.to_numpy()
+            return tuple(labels.index[i] for i in sorted(range(len(labels)), key=lambda i: codes[i]))
+
+        rows = [_replace(self._layout.rows[0], keep=ordered(rl), order="keep", top=None)]
+        cols = [_replace(self._layout.cols[0], keep=ordered(cl), order="keep", top=None)]
+        return self.relayout(rows=rows, cols=cols, **self._measure_spec())
+
+    def stats(self, n: int = 7) -> pd.DataFrame:
+        """The ``n`` costliest kinds of step logged so far (time, CPU, memory)."""
+        return _log_stats(n)
 
     def _layout_stale(self) -> bool:
         data = self.data
@@ -631,8 +831,12 @@ class View:
             spec[axis] = kept if kept or specs == [] else None
         if data.empty:
             return self._clone(options=options, spec=spec)
-        layout = fit_layout(data, options, rows=spec.get("rows"), cols=spec.get("cols"),
-                            values=spec.get("values"), agg=spec.get("agg"))
+        with log.step("fit", f"refit on {len(data):,} rows") as st:
+            layout = fit_layout(data, options, rows=spec.get("rows"), cols=spec.get("cols"),
+                                values=spec.get("values"), agg=spec.get("agg"))
+            st.detail += f" -> {layout.describe()}"
+        if self._paged is not None:
+            layout = freeze(layout, data)
         return self._clone(layout=layout, options=options, spec=spec)
 
     def relayout(
@@ -648,6 +852,8 @@ class View:
         options = self._options.replace(**opts) if opts else self._options
         spec = {"rows": rows, "cols": cols, "values": values, "agg": agg}
         layout = fit_layout(self.data, options, **spec)
+        if self._paged is not None:
+            layout = freeze(layout, self.data)
         return self._clone(layout=layout, options=options, spec=spec)
 
     def layers(self, n: int) -> "View":
@@ -730,9 +936,12 @@ class View:
         if agg == COUNT:
             values, agg = None, "sum"
         layout = Layout((row,), tuple(cols), values, agg or "sum")
+        if self._paged is not None:
+            layout = freeze(layout, data)
         spec = {"rows": [row], "cols": list(cols), "values": values, "agg": agg}
         parent = self if self._mode == PIVOT else self._parent
-        return View(self._source, layout, options=options, mode=HIST, filters=self._filters, parent=parent, spec=spec)
+        return View(self._paged if self._paged is not None else self._source, layout, options=options, mode=HIST,
+                    filters=self._filters, parent=parent, spec=spec, display=self._display, derived=self._derived, survey=self._survey)
 
     def _default_hist_column(self, prof: Profile) -> str:
         if self._layout.values is not None and self._layout.values in prof and prof[self._layout.values].kind == NUMERIC:
@@ -757,10 +966,19 @@ class View:
         return s
 
     def title(self) -> str:
-        n, total = len(self.data), len(self._source)
-        s = f"{self._mode} \u00b7 {self.describe()} \u00b7 {n:,} rows"
-        if n != total:
-            s += f" of {total:,}"
+        if self._paged is not None:
+            total = len(self._paged)
+            seen = self._cache.get("paged_rows")
+            s = f"{self._mode} \u00b7 {self.describe()} \u00b7 "
+            s += f"{seen:,} of \u2248{total:,} rows" if (self._filters and seen is not None) else f"\u2248{total:,} rows"
+            s += f" (paged, {self._paged.survey.plan.n_pages} pages)"
+            if self.approximate:
+                s += " \u00b7 \u2248 measure from sample"
+        else:
+            n, total = len(self.data), len(self._source)
+            s = f"{self._mode} \u00b7 {self.describe()} \u00b7 {n:,} rows"
+            if n != total:
+                s += f" of {total:,}"
         if self._filters:
             s += " \u00b7 slices: " + " & ".join(f.label for f in self._filters)
         return s
@@ -768,11 +986,12 @@ class View:
     def render(self, *, width: Optional[int] = None, ascii_only: bool = False, compact: Optional[bool] = None,
                max_rows: Optional[int] = None, title: bool = True) -> str:
         """Text rendering of the current mode."""
-        head = self.title() + "\n" if title else ""
-        if self.is_hist:
-            return render_hist(self.bins(), title=head.rstrip("\n") or None, width=width, ascii_only=ascii_only,
-                               compact=True if compact is None else compact, max_rows=max_rows)
-        return head + render_pivot(self.pivot(), width=width, max_rows=max_rows, compact=bool(compact))
+        with log.step("render", "text"):
+            head = self.title() + "\n" if title else ""
+            if self.is_hist:
+                return render_hist(self.bins(), title=head.rstrip("\n") or None, width=width, ascii_only=ascii_only,
+                                   compact=True if compact is None else compact, max_rows=max_rows)
+            return head + render_pivot(self.pivot(), width=width, max_rows=max_rows, compact=bool(compact))
 
     def show(self, **kw: Any) -> None:
         print(self.render(**kw))
@@ -798,6 +1017,10 @@ class View:
 
     def html(self, title: bool = True) -> str:
         """Rich HTML: a heatmap table for pivots, an SVG bar chart for histograms."""
+        with log.step("render", "svg" if self.is_hist else "html"):
+            return self._html(title)
+
+    def _html(self, title: bool = True) -> str:
         d = self._display
         t = self.title() if title else None
         if self.is_hist:
@@ -889,4 +1112,4 @@ class View:
         return self.table().to_csv(path, **kw)
 
 
-__all__ = ["View", "Filter", "make_filter", "PIVOT", "HIST"]
+__all__ = ["View", "Filter", "Derived", "make_filter", "PIVOT", "HIST"]

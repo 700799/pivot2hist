@@ -104,3 +104,24 @@ def test_infer_scalars_and_index_and_duplicates():
     assert p2h.load(dup).columns.tolist() == ["a", "a.1", "b"]
     fw = p2h.sample.firewall_logs(50)
     assert p2h.load(fw) is fw
+
+
+def test_cli_survey_stats_chains(tmp_path, capsys, fw):
+    path = tmp_path / "fw.parquet"
+    pytest.importorskip("pyarrow")
+    fw.to_parquet(path, index=False)
+    assert main([str(path), "--survey"]) == 0
+    out = capsys.readouterr().out
+    assert "parquet" in out and "plan:" in out
+    assert main([str(path), "--budget", "0.1", "--max-rows", "6", "--stats", "--width", "100"]) == 0
+    out = capsys.readouterr().out
+    assert "(paged" in out and "costliest steps" in out
+    assert main([str(path), "--mode", "sample", "--columns", "action,bytes", "--count", "--layout"]) == 0
+    assert "count by" in capsys.readouterr().out
+    auth = tmp_path / "auth.csv"
+    p2h.sample.auth_logs(500).to_csv(auth, index=False)
+    assert main([str(auth), "--chains", "event", "--by", "user", "--time", "timestamp", "--width", "100"]) == 0
+    out = capsys.readouterr().out
+    assert "from x to" in out and "login_success" in out
+    assert main([str(auth), "-v", "--max-rows", "5"]) == 0
+    assert "fit" in capsys.readouterr().err
