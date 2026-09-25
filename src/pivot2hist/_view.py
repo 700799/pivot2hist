@@ -1161,6 +1161,28 @@ class View:
             })
         return pd.DataFrame(rows, columns=["row", "col", "observed", "expected", "residual", "direction"])
 
+    def llm_context(self, *, max_rows: int = 30, max_cols: int = 12, notes: bool = True) -> Dict[str, Any]:
+        """This view as context for an LLM: ``{"description", "metadata", "table"}``.
+
+        ``description`` is a short natural-language summary (what the table shows, its
+        shape, active slices, whether it's approximate, the most surprising cell if one
+        is cheap to compute); ``metadata`` is the same facts as plain JSON (measure,
+        dims, shape, slices, per-column kind/semantic/cardinality for just the columns
+        involved - not a full profile dump); ``table`` is the data itself as a GitHub-
+        flavored markdown table, truncated (not sampled) to ``max_rows`` x ``max_cols``.
+        Markdown, not HTML or a list of per-cell dicts, because it's both what a model
+        has seen the most of and the cheapest in tokens. See
+        :func:`pivot2hist.llm_context` for the plain function, and
+        :func:`pivot2hist.agent.llm_context` for the JSON-source version.
+
+        ``notes=False`` skips the bonus anomaly check (cheap, but not free, and not
+        every layout supports it - a 1-D pivot or a non-additive measure just skip it
+        either way).
+        """
+        from ._llm import llm_context as _llm_context
+
+        return _llm_context(self, max_rows=max_rows, max_cols=max_cols, notes=notes)
+
     def _repr_html_(self) -> str:
         return self.html()
 

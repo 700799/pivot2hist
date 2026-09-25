@@ -35,9 +35,12 @@ server = _Server(
         "Pivot and explore tabular data (CSV/TSV/JSON/JSONL/Parquet/DuckDB, or inline "
         "records). Start with describe() to see the columns; call pivot() with no "
         "rows/cols to get an auto-fitted first look; refine with filters, or call "
-        "suggest() for alternative layouts and slicers() for values to filter on. Files "
-        "are surveyed against available memory and streamed page by page when too large "
-        "to hold in memory, so any source can be passed directly by path."
+        "suggest() for alternative layouts and slicers() for values to filter on. Prefer "
+        "llm_context() over pivot() when you're about to reason over or quote the result "
+        "yourself, rather than hand it to other code - it returns a natural-language "
+        "description and a markdown table instead of raw JSON rows. Files are surveyed "
+        "against available memory and streamed page by page when too large to hold in "
+        "memory, so any source can be passed directly by path."
     ),
 )
 
@@ -86,6 +89,37 @@ def pivot(
     return _agent.pivot(
         source, rows=rows, cols=cols, values=values, agg=agg, filters=filters, mode=mode,
         on=on, by=by, bins=bins, max_rows=max_rows, max_cols=max_cols, memory_budget_mb=memory_budget_mb,
+    )
+
+
+@server.tool()
+def llm_context(
+    source: str,
+    rows: Optional[List[str]] = None,
+    cols: Optional[List[str]] = None,
+    values: Optional[str] = None,
+    agg: Optional[str] = None,
+    filters: Optional[List[Dict[str, Any]]] = None,
+    mode: str = "pivot",
+    on: Optional[str] = None,
+    by: Optional[str] = None,
+    bins: Optional[str] = None,
+    max_rows: int = 40,
+    max_cols: int = 12,
+    table_max_rows: int = 30,
+    table_max_cols: int = 12,
+    memory_budget_mb: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Same arguments as pivot(), but returns {"description", "metadata", "table"}
+    instead of a raw table: a short natural-language summary, compact structured facts
+    (measure, dims, shape, active filters, per-column kind/semantic/cardinality), and the
+    table itself as a markdown string truncated to table_max_rows x table_max_cols.
+    Prefer this over pivot() when you (the calling model) are about to reason over or
+    quote the result, rather than pass it on to other code."""
+    return _agent.llm_context(
+        source, rows=rows, cols=cols, values=values, agg=agg, filters=filters, mode=mode,
+        on=on, by=by, bins=bins, max_rows=max_rows, max_cols=max_cols,
+        table_max_rows=table_max_rows, table_max_cols=table_max_cols, memory_budget_mb=memory_budget_mb,
     )
 
 

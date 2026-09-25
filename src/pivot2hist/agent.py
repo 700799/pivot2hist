@@ -217,6 +217,64 @@ def pivot(
     return v.to_dict()
 
 
+def llm_context(
+    source: Source,
+    *,
+    rows: Optional[Sequence[str]] = None,
+    cols: Optional[Sequence[str]] = None,
+    values: Optional[str] = None,
+    agg: Optional[str] = None,
+    filters: Optional[Sequence[Filter]] = None,
+    mode: str = "pivot",
+    on: Optional[str] = None,
+    by: Optional[Union[str, Sequence[str]]] = None,
+    bins: Optional[Union[str, int]] = None,
+    max_rows: int = 40,
+    max_cols: int = 12,
+    table_max_rows: int = 30,
+    table_max_cols: int = 12,
+    layers: int = 2,
+    aspect: Optional[float] = None,
+    memory_budget_mb: Optional[float] = None,
+    columns: Optional[Sequence[str]] = None,
+    notes: bool = True,
+    **opts: Any,
+) -> Dict[str, Any]:
+    """Build a pivot/histogram (same arguments as :func:`pivot`) and return it packaged
+    for an LLM instead of as a raw table: ``{"description", "metadata", "table"}``.
+
+    ``description`` is a short natural-language summary (what the table shows, its
+    shape, active filters, whether it's approximate, the most surprising cell if cheap
+    to compute); ``metadata`` is the same facts as plain JSON, scoped to just the
+    columns actually used (not a full profile dump); ``table`` is a GitHub-flavored
+    markdown rendering, truncated (not sampled) to ``table_max_rows`` x
+    ``table_max_cols`` — deliberately markdown rather than a list of per-cell dicts,
+    since it's both what a model has seen the most of and the cheapest in tokens. Prefer
+    this over :func:`pivot` when the result is headed into a model's context rather than
+    back into your own code.
+    """
+    from . import fit as _fit
+
+    v = _fit(
+        source,
+        rows=list(rows) if rows is not None else None,
+        cols=list(cols) if cols is not None else None,
+        values=values,
+        agg=agg,
+        max_rows=max_rows,
+        max_cols=max_cols,
+        layers=layers,
+        aspect=aspect,
+        memory_budget_mb=memory_budget_mb,
+        columns=columns,
+        **opts,
+    )
+    v = _apply_filters(v, filters)
+    if mode == "hist" or on is not None or by is not None:
+        v = v.histogram(on, by, bins=bins)
+    return v.llm_context(max_rows=table_max_rows, max_cols=table_max_cols, notes=notes)
+
+
 def suggest(
     source: Source,
     n: int = 5,
@@ -308,4 +366,4 @@ def slicers(
     return {col: [{"value": val, "count": int(c)} for val, c in vals] for col, vals in raw.items()}
 
 
-__all__ = ["describe", "pivot", "suggest", "slicers", "anomalies", "FILTER_OPS"]
+__all__ = ["describe", "pivot", "llm_context", "suggest", "slicers", "anomalies", "FILTER_OPS"]

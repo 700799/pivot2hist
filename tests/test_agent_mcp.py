@@ -128,7 +128,7 @@ def test_mcp_tools_registered(mcp_server_module):
 
     tools = asyncio.run(mcp_server_module.server.list_tools())
     names = {t.name for t in tools}
-    assert names == {"describe", "pivot", "suggest", "slicers", "anomalies"}
+    assert names == {"describe", "pivot", "llm_context", "suggest", "slicers", "anomalies"}
     for t in tools:
         assert t.description and len(t.description) > 10
 
@@ -157,6 +157,24 @@ def test_mcp_call_tool_roundtrip(mcp_server_module, tmp_path, fw):
     assert "alternatives" in d3 and len(d3["alternatives"]) <= 3
     d4 = json.loads(r4.content[0].text)
     assert "action" in d4
+
+
+def test_mcp_llm_context_tool(mcp_server_module, tmp_path, fw):
+    import asyncio
+
+    path = tmp_path / "fw.csv"
+    fw.to_csv(path, index=False)
+
+    async def run():
+        return await mcp_server_module.server.call_tool(
+            "llm_context", {"source": str(path), "rows": ["action"], "cols": ["protocol"], "agg": "count"}
+        )
+
+    r = asyncio.run(run())
+    d = json.loads(r.content[0].text)
+    assert set(d) == {"description", "metadata", "table"}
+    assert d["metadata"]["measure"] == "count"
+    assert d["table"].startswith("|")
 
 
 def test_agent_describe_distributions(fw):

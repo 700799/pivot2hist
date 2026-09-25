@@ -40,7 +40,7 @@ from ._semantic import HIERARCHY, infer_semantic
 from ._survey import Machine, PagedSource, Plan, Survey, downcast, load_planned, survey
 from ._view import HIST, PIVOT, Derived, Filter, View
 
-__version__ = "0.11.0"
+__version__ = "0.12.0"
 
 _PLANNED_KEYS = ("memory_budget_mb", "mode", "columns", "query", "table", "sample_rows", "page_rows")
 
@@ -168,6 +168,32 @@ def modes(data: Any, column: str, k: Optional[int] = None, **kw: Any) -> Optiona
     return fit.components()
 
 
+def llm_context(
+    data: Any,
+    *,
+    rows: Optional[Sequence[DimSpec]] = None,
+    cols: Optional[Sequence[DimSpec]] = None,
+    values: Optional[str] = None,
+    agg: Optional[str] = None,
+    max_rows: int = 30,
+    max_cols: int = 12,
+    notes: bool = True,
+    **opts: Any,
+) -> dict:
+    """``data`` auto-fitted (or laid out as given) and packaged for an LLM:
+    ``{"description", "metadata", "table"}`` - a short natural-language summary, compact
+    structured facts (schema, shape, slices, measure), and the table itself as a
+    GitHub-flavored markdown string, truncated to ``max_rows`` x ``max_cols``.
+
+    Equivalent to ``p2h.fit(data, ...).llm_context(...)``; see :meth:`View.llm_context`
+    for what each field means, and :func:`pivot2hist.agent.llm_context` for the same
+    thing from the plain-JSON agent surface (a source path/records instead of a frame,
+    optional ``filters``).
+    """
+    v = fit(data, rows=rows, cols=cols, values=values, agg=agg, **opts)
+    return v.llm_context(max_rows=max_rows, max_cols=max_cols, notes=notes)
+
+
 def explore(data: Any, **kw: Any) -> Any:
     """Interactive Jupyter explorer (needs ``ipywidgets``): menus to alter, slice, best-fit,
     reduce and cluster, with heatmap pivots and SVG histograms."""
@@ -267,6 +293,7 @@ def dependencies(data: Any, columns: Optional[Sequence[str]] = None, *, bins: in
 
 __all__ = [
     "fit", "pivot", "histogram", "profile", "load", "suggest", "explore", "cluster", "chains", "regimes", "dependencies",
+    "llm_context",
     "survey", "load_planned", "downcast", "stats", "verbose", "log", "distribution",
     "sequences", "transitions", "transition_matrix", "steady_state",
     "View", "Layout", "Dim", "FitOptions", "Filter", "Derived", "Profile", "ColumnProfile",
