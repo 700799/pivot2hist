@@ -36,8 +36,11 @@ plot = ["matplotlib>=3.5"]
 parquet = ["pyarrow>=10"]
 duckdb = ["duckdb>=0.9"]
 cluster = ["scikit-learn>=1.3"]
-mcp = ["mcp>=1.0"]
-dev = ["pytest>=7", "build", "ipywidgets>=8", "anywidget>=0.9", "pyarrow>=10", "duckdb>=0.9", "mcp>=1.0"]
+# the mcp package has never supported Python 3.9 (every release requires >=3.10); the
+# marker makes `pip install "pivot2hist[mcp]"` a no-op there instead of a hard failure -
+# everything else in pivot2hist still works on 3.9, just not pivot2hist-mcp itself.
+mcp = ["mcp>=1.0; python_version>='3.10'"]
+dev = ["pytest>=7", "build", "ipywidgets>=8", "anywidget>=0.9", "pyarrow>=10", "duckdb>=0.9", "mcp>=1.0; python_version>='3.10'"]
 
 [project.scripts]
 pivot2hist = "pivot2hist.cli:main"
