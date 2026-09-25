@@ -1,14 +1,16 @@
 # pivot2hist
 
-Auto-fitted pivot tables that toggle to histograms and back, with slicing, clustering and
-Jupyter menus. Built for cyber logs (firewall, auth, DNS, EDR ...) but the type guessing is
+Auto-fitted pivot tables that toggle to histograms and back, with slicing, clustering,
+a draggable field list, a dark modern theme, an MCP server for LLM agents and Jupyter
+menus. Built for cyber logs (firewall, auth, DNS, EDR ...) but the type guessing is
 generic, so it works on any tabular data.
 
 ```
 pip install pivot2hist                       # pandas + numpy only
-pip install "pivot2hist[jupyter]"            # + ipywidgets for the interactive explorer
+pip install "pivot2hist[jupyter]"            # + ipywidgets/anywidget for the interactive explorer
 pip install "pivot2hist[parquet,duckdb]"     # + pyarrow / duckdb sources (surveyed and paged)
 pip install "pivot2hist[cluster]"            # + scikit-learn for real HDBSCAN
+pip install "pivot2hist[mcp]"                # + an MCP server for LLM agents
 ```
 
 ```python
@@ -19,17 +21,20 @@ v                                  # notebook: heatmap pivot, best fit for a 40 
 v.toggle()                         # the same table as an SVG histogram; toggle() again returns
 v.slice(action="deny")             # slices stack, show in the title and survive toggling
 v.histogram("bytes", by="action")  # one column, nice log bins, one series per action
-v.suggest()                        # the auto-guess menu: alternative layouts, best first
+v.suggest()                        # the auto-guess menu: alternative layouts, scored, best first
 v.cluster(4)                       # group similar rows with k-means
 v.coarser("src_ip")                # 10.0.1.5 -> 10.0.1.0/24 -> 10.0.0.0/16
-p2h.explore(df)                    # Jupyter menus for all of the above
+v.anomalies()                      # cells that break the row/column independence pattern
+p2h.explore(df)                    # Jupyter menus: drag fields, pick a theme, all of the above
 p2h.fit("huge.parquet")            # surveyed against your RAM; fitted on a sample, aggregated page by page
 p2h.chains(df, "event", by="user", time="timestamp")   # Markov transition matrix as a pivot
 p2h.verbose(); p2h.stats(7)        # scrolling step log; the seven costliest steps
+p2h.agent.pivot("firewall.csv", rows=["src_ip"], filters=[{"column": "action", "eq": "deny"}])  # plain JSON, for LLM agents
 ```
 
 Shell: `pivot2hist firewall.csv --slice action=deny --hist --on bytes --by dst_port`,
-`pivot2hist --demo firewall`.
+`pivot2hist --demo firewall`. MCP server for any MCP client (Claude Code, Claude Desktop,
+...): `pivot2hist-mcp`.
 
 ## Type guessing
 
@@ -127,9 +132,11 @@ v.toggle().style(stacked=True, log_y=True)          # histogram look
 v.html(); v.svg()                                    # the markup, if you want it
 ```
 
-## Multi-layer
+## Multi-layer: rows within rows, columns within columns
 
-Both axes stack dimensions; budgets are planned jointly so the product fits the box:
+Both axes stack dimensions to any depth (`layers=`, default 2); budgets are planned
+jointly so the product fits the box, and either axis can nest further columns the same
+way (`cols=["protocol", "action"]` is columns within columns):
 
 ```
 pivot · count by severity > action x protocol · 5,000 rows
@@ -141,7 +148,15 @@ severity action
 ...
 ```
 
-`v.layers(1)`, `v.layers(3)`, `v.fit_to(20, 6)` refit with a different depth or box.
+`v.layers(1)`, `v.layers(3)`, `v.fit_to(20, 6)` refit with a different depth or box. For
+nested rows, `v.style(subtotals=True)` adds a subtotal row after every outer group and
+`v.style(outline=True)` draws each group as a collapsible block (`<details>`, no
+JavaScript) that folds and unfolds in the notebook — both work with `totals=True` too.
+
+```python
+v.style(subtotals=True, totals=True)
+v.style(outline=True)
+```
 
 ## Toggle to histogram and back
 
@@ -300,28 +315,123 @@ v.cluster(on=["bytes", "duration"], method="hdbscan")
 p2h.cluster(df, ["bytes", "duration"], method="dbscan")
 ```
 
+## Anomalies, distributions and confidence
+
+Three small, statistically-grounded additions to "what does this data look like":
+
+**Surprise, not just magnitude.** `v.style(heat="surprise")` colours every cell by how far
+it is from what independence of the row and column axes would predict (a Pearson-style
+residual against `row_total x col_total / grand_total`), instead of by raw size — a big
+cell isn't necessarily an unusual one. `v.anomalies(n)` is the same computation as a
+ranked list: the `n` cells that most break the independence pattern, with `observed`,
+`expected` and `residual` (positive = more than expected, negative = less). Needs a 2-D
+pivot and an additive measure (`sum`/`count`).
+
+```python
+v.style(heat="surprise")
+v.anomalies(10)          # e.g. a (port, action) pair that denies far more than its margins predict
+p2h.agent.anomalies("firewall.csv", rows=["dst_port"], cols=["action"])
+```
+
+**What distribution does this column look like?** `p2h.distribution(df, "bytes")` (or
+`v.distribution("bytes")`) fits normal, lognormal, exponential, gamma, uniform, poisson,
+geometric, bernoulli and discrete-uniform by BIC (log-likelihood penalised by parameter
+count) and returns the best one — closed-form MLE, no scipy. Integer data only competes
+against the discrete families when it has few distinct values (labels, small counts);
+wide-range integer data (byte counts, latencies in whole ms) competes against the
+continuous ones, since a probability *density* and a probability *mass* aren't
+comparable by raw likelihood (a density can exceed 1 and would win unfairly on repeated
+discrete values otherwise). Not run automatically — it's a further, explicit pass:
+
+```python
+p2h.distribution(df, "bytes").describe()   # "Lognormal(mu=7.02, sigma=1.83)"
+p2h.rank_distributions(df["duration"])     # every family that fits, best first
+```
+
+**How much better is this layout than the alternatives?** `v.confidence` is `"high"`,
+`"medium"` or `"low"` from the score gap to the runner-up in `v.suggest()`; `"low"` means
+the alternatives are genuinely close and worth a look, not a formality.
+`v.suggest_ranked(n)` keeps the raw score next to each `Layout`.
+
 ## Jupyter explorer
 
 ```python
 p2h.explore(df)                                  # or v.explore(); files/DuckDB are surveyed and paged
 ```
 
-An ipywidgets app: Pivot / Histogram / Chains toggle, **Best fit**, **Suggest** (ranked
-alternatives in a dropdown), Undo/Reset, and tabs for Layout (rows, columns, values, agg,
-layers, box, bin rule, scale, order), Histogram (on, by, bins, stacked, density, log y),
-Slicers (multi-selects for labels, percentile range sliders for numbers, date ranges, a
-query box, top-N), Reduce & cluster (sample, cluster k / method / on / collapse,
-co-cluster, coarser / finer), Chains (state, entity, time, probabilities, plus the most
-frequent 3-step chains), Style, Code (the Python reproducing the current view), Profile,
-Data (the survey and plan) and Stats (the seven costliest steps). A scrolling log of major
-steps sits under the output. `explorer.snapshot_html()` renders a static picture of the
-interface for docs or sharing.
+An ipywidgets + anywidget app: Pivot / Histogram / Chains toggle, **Best fit**,
+**Suggest** (ranked alternatives with their score in a dropdown), Undo/Reset, and tabs
+for **Fields** (see below), Layout (rows, columns, values, agg, layers, box, bin rule,
+scale, order), Histogram (on, by, bins, stacked, density, log y), Slicers (multi-selects
+for labels, percentile range sliders for numbers, date ranges, a query box, top-N),
+Reduce & cluster (sample, cluster k / method / on / collapse, co-cluster, coarser /
+finer), Chains (state, entity, time, probabilities, plus the most frequent 3-step
+chains), Style (theme, heat incl. `surprise`, totals, subtotals, outline, bars, compact),
+Code (the Python reproducing the current view), Profile, Data (the survey and plan) and
+Stats (the seven costliest steps). A scrolling log of major steps sits under the output.
+`explorer.snapshot_html()` renders a static picture of the interface for docs or sharing.
 
-![explorer, reduce & cluster tab, on a paged Parquet source](docs/explorer-reduce.png)
+**Fields tab**: every column as a draggable chip — kind, semantic type, non-null count
+(`n`), distinct count (`≠`) and *variety* (distinct ÷ non-null, as a small bar:
+a handful of repeated labels reads near-empty, an id-like column reads full) — dropped
+into **Rows** / **Columns** / **Values** / **Slicers**. Drop more than one field on an
+axis for rows within rows or columns within columns, in the order you drop them; the
+Layout tab and the Fields pane stay in sync either way. Falls back to plain dropdowns and
+move/remove buttons when `anywidget` isn't installed, with the same
+`rows`/`cols`/`values`/`slicers` interface either way.
+
+**Theme**: `v.style(theme="graphite")` (or the Style tab's Theme dropdown) switches every
+rendered surface — the heatmap, the histogram, the Fields pane, the log panel, and (for
+`snapshot_html()`) the explorer's own chrome — to a dark, modern look; `theme="light"` is
+the default and renders byte-identical to earlier releases.
+
+![explorer, Fields tab, graphite theme, on a paged Parquet source](docs/explorer-fields-graphite.png)
 
 ![explorer, chains tab, on auth logs](docs/explorer-chains.png)
 
 ![graphics: clustered heatmap, /24 roll-up, hour-of-day x weekday, natural-break stacked histogram](docs/graphics.png)
+
+## For LLM agents
+
+`pivot2hist.agent` is a plain-JSON surface: every function takes and returns only
+`str`/`int`/`float`/`bool`/`None`/`list`/`dict` — never a DataFrame or a pandas/numpy
+object — so a tool-calling agent's framework can pass the model's arguments straight
+through and hand the result straight back, no pandas import on the caller's side.
+Docstrings there double as the tool descriptions below.
+
+```python
+from pivot2hist import agent
+
+agent.describe("events.parquet")                          # columns, semantic types, time series; surveys, never fully loads
+agent.pivot("events.parquet", rows=["src_ip"], cols=["action"],
+            filters=[{"column": "action", "in": ["deny", "drop"]}])
+agent.pivot("events.parquet", mode="hist", on="bytes", bins=8)
+agent.suggest("events.parquet", 5)                         # ranked layouts, with score and confidence
+agent.slicers("events.parquet", columns=["action"])        # values to filter on
+agent.anomalies("events.parquet", rows=["dst_port"], cols=["action"])
+```
+
+Filter objects: `{"column": c, "eq"|"not_eq"|"in"|"range"|"gt"|"gte"|"lt"|"lte"|"regex"|"since"|"on": value}`
+or `{"query": "bytes > 1000 and action == 'deny'"}` (`pivot2hist.agent.FILTER_OPS` lists
+the operators). Everything routes through `fit()`, so a huge file is surveyed and paged
+the same as in a notebook, and a paged result says `"paged": true` (`count`/`sum`/`min`/
+`max`/`mean` stay exact; other aggregations fall back to a sample and say
+`"approximate": true`).
+
+**MCP server** (`pip install "pivot2hist[mcp]"`) exposes the same operations to any
+MCP client — Claude Code, Claude Desktop, or your own agent:
+
+```
+pivot2hist-mcp                    # stdio server; add it to your MCP client's config
+python -m pivot2hist.mcp_server   # the same thing
+```
+
+Tools: `describe(source, columns=, memory_budget_mb=, distributions=)`,
+`pivot(source, rows=, cols=, values=, agg=, filters=, mode=, on=, by=, bins=, max_rows=,
+max_cols=, memory_budget_mb=)`, `suggest(source, n=, filters=)`,
+`slicers(source, columns=, top=)`, `anomalies(source, n=, rows=, cols=, filters=)`.
+Works against both `mcp<2` (`FastMCP`) and `mcp>=2` (`MCPServer`) — whichever is
+installed.
 
 ## Loading data
 
@@ -377,6 +487,6 @@ unique, DuckDB's engine for DuckDB sources) and the search is bounded by samplin
 ## Development
 
 ```
-pip install -e ".[dev,jupyter]"
+pip install -e ".[dev,jupyter,parquet,duckdb,mcp]"
 pytest
 ```

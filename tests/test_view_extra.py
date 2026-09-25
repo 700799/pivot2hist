@@ -160,3 +160,73 @@ def test_cluster_methods_and_cocluster_views(fw):
     assert "cluster" not in fw.columns and "block_r" not in fw.columns
     assert cc.slice(block_r=cc.pivot().index[0][0]).pivot().shape[0] >= 1  # derived columns are sliceable
     assert cc.to_dict()["layout"]["rows"][0]["column"] == "block_r"
+
+
+def test_anomalies(fw):
+    v = p2h.fit(fw, rows=["dst_port"], cols=["action"], agg="count", max_rows=10)
+    an = v.anomalies(5)
+    assert list(an.columns) == ["row", "col", "observed", "expected", "residual", "direction"]
+    assert len(an) == 5
+    resid_mag = an["residual"].abs()
+    assert (resid_mag.diff().dropna() <= 1e-9).all()  # sorted by |residual| descending
+    assert set(an["direction"]) <= {"over", "under"}
+    assert ((an["direction"] == "over") == (an["residual"] > 0)).all()
+    # expected sums to a sane magnitude alongside observed (not a strict equality: only 5 of many cells)
+    assert abs(an["expected"].sum() - an["observed"].sum()) < an["observed"].sum()
+    with pytest.raises(ValueError):
+        p2h.fit(fw, rows=["dst_port"], cols=[], agg="count").anomalies()
+    mean_v = p2h.fit(fw, rows=["dst_port"], cols=["action"], values="bytes", agg="mean")
+    with pytest.raises(ValueError):
+        mean_v.anomalies()
+
+
+def test_anomalies_flags_a_known_over_representation():
+    # build a table where one cell is obviously way more common than its margins predict
+    rng = np.random.default_rng(0)
+    n = 4000
+    row = rng.choice(["a", "b", "c"], n)
+    col = rng.choice(["x", "y", "z"], n)
+    df = pd.DataFrame({"row": row, "col": col})
+    extra = pd.DataFrame({"row": ["a"] * 800, "col": ["x"] * 800})  # inject a clearly over-represented combo
+    df = pd.concat([df, extra], ignore_index=True)
+    v = p2h.fit(df, rows=["row"], cols=["col"], agg="count")
+    an = v.anomalies(1)
+    assert an.iloc[0]["row"] == "a" and an.iloc[0]["col"] == "x" and an.iloc[0]["direction"] == "over"
+
+
+def test_confidence_and_suggest_ranked(fw):
+    v = p2h.fit(fw, max_rows=12, max_cols=5)
+    ranked = v.suggest_ranked(5)
+    assert len(ranked) >= 1
+    scores = [s for s, _ in ranked]
+    assert scores == sorted(scores, reverse=True)
+    assert v.confidence in ("high", "medium", "low")
+    assert v.suggest(3) == [lay for _, lay in v.suggest_ranked(3)]
+    fixed = p2h.fit(fw, rows=["dst_port"], cols=["action"], agg="count")
+    assert fixed.confidence == "high"  # nothing to compare against
+
+
+def test_view_distribution(fw):
+    v = p2h.fit(fw, max_rows=8, max_cols=4)
+    fit = v.distribution("bytes")
+    assert fit is not None and fit.name in p2h.DIST_FAMILIES
+    assert v.distribution("duration") is not None
+    with pytest.raises(KeyError):
+        v.distribution("nope")
+    sliced = v.slice(action="deny")
+    assert sliced.distribution("bytes") is None or sliced.distribution("bytes").n <= len(sliced.data)
+
+
+def test_top_level_distribution_function(fw):
+    fit = p2h.distribution(fw, "bytes")
+    assert fit.name in p2h.DIST_FAMILIES
+    with pytest.raises(KeyError):
+        p2h.distribution(fw, "nope")
+
+
+def test_surprise_heat_style(fw):
+    v = p2h.fit(fw, rows=["dst_port"], cols=["action"], agg="count", max_rows=10)
+    plain = v.style(heat="table").html()
+    surprise = v.style(heat="surprise").html()
+    assert plain != surprise
+    assert "<table" in surprise

@@ -26,6 +26,8 @@ from . import agent, sample
 from ._binning import RULES, bin_count, bin_edges, bin_labels, kde
 from ._chains import sequences, steady_state, transition_matrix, transitions
 from ._cluster import COMETHODS, METHODS, cluster_frame, cluster_rows, cocluster, dbscan, kmeans
+from ._density import DistFit, fit_distribution, rank_distributions
+from ._density import FAMILIES as DIST_FAMILIES
 from ._fit import AGGS, DEFAULT_WEIGHTS, Dim, DimSpec, FitOptions, Layout, build_table, fit_layout, suggest_layouts
 from ._io import load
 from ._log import log, stats, verbose
@@ -35,7 +37,7 @@ from ._semantic import HIERARCHY, infer_semantic
 from ._survey import Machine, PagedSource, Plan, Survey, downcast, load_planned, survey
 from ._view import HIST, PIVOT, Derived, Filter, View
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 _PLANNED_KEYS = ("memory_budget_mb", "mode", "columns", "query", "table", "sample_rows", "page_rows")
 
@@ -127,6 +129,18 @@ def suggest(data: Any, n: int = 5, **opts: Any) -> list:
     return [lay for _, lay in suggest_layouts(load(data), FitOptions().replace(**opts) if opts else None, n)]
 
 
+def distribution(data: Any, column: str, **kw: Any):
+    """Best-fitting probability distribution for one numeric column of ``data`` (BIC over
+    normal/lognormal/exponential/gamma/uniform/poisson/geometric/bernoulli/discrete-uniform).
+
+    ``kw`` forwards to :func:`fit_distribution` (``families=``, ``discrete_max=``, ``min_n=``).
+    """
+    df = load(data)
+    if column not in df.columns:
+        raise KeyError(f"unknown column {column!r}")
+    return fit_distribution(df[column], **kw)
+
+
 def explore(data: Any, **kw: Any) -> Any:
     """Interactive Jupyter explorer (needs ``ipywidgets``): menus to alter, slice, best-fit,
     reduce and cluster, with heatmap pivots and SVG histograms."""
@@ -176,12 +190,12 @@ def chains(
 
 __all__ = [
     "fit", "pivot", "histogram", "profile", "load", "suggest", "explore", "cluster", "chains",
-    "survey", "load_planned", "downcast", "stats", "verbose", "log",
+    "survey", "load_planned", "downcast", "stats", "verbose", "log", "distribution",
     "sequences", "transitions", "transition_matrix", "steady_state",
     "View", "Layout", "Dim", "FitOptions", "Filter", "Derived", "Profile", "ColumnProfile",
-    "Survey", "Plan", "Machine", "PagedSource",
+    "Survey", "Plan", "Machine", "PagedSource", "DistFit",
     "build_table", "fit_layout", "suggest_layouts", "bin_edges", "bin_count", "bin_labels", "kde",
     "cluster_frame", "cluster_rows", "cocluster", "kmeans", "dbscan", "METHODS", "COMETHODS",
-    "infer_semantic", "HIERARCHY", "DEFAULT_WEIGHTS",
+    "infer_semantic", "HIERARCHY", "DEFAULT_WEIGHTS", "fit_distribution", "rank_distributions", "DIST_FAMILIES",
     "RULES", "AGGS", "PIVOT", "HIST", "sample", "agent", "__version__",
 ]

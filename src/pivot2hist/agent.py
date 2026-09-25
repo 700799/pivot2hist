@@ -93,6 +93,7 @@ def describe(
     *,
     columns: Optional[Sequence[str]] = None,
     memory_budget_mb: Optional[float] = None,
+    distributions: bool = False,
     **load_kwargs: Any,
 ) -> Dict[str, Any]:
     """What is this data? Column kinds, semantic types, cardinality, nulls, time series.
@@ -102,13 +103,21 @@ def describe(
     than a few tens of thousands of rows regardless of the source's real size. Call this
     first; call :func:`pivot` to actually see the data.
 
+    With ``distributions=True``, each numeric column also gets a ``distribution`` entry —
+    the closed-form family (normal, lognormal, exponential, gamma, uniform, poisson,
+    geometric, bernoulli, or discrete-uniform) that best explains it by BIC, e.g.
+    ``{"family": "lognormal", "params": {"mu": 7.0, "sigma": 1.8}}``. Off by default: it's
+    a further, slower pass over every numeric column, not part of the cheap survey.
+
     Returns a dict with ``columns`` (one entry per column: ``name``, ``kind``,
-    ``semantic`` type or ``None``, ``nunique``, ``null_frac``, ``examples``),
-    ``rows_profiled``, ``is_time_series``, ``time_column``, and — for a file or DuckDB
-    source — ``survey`` (disk size, estimated memory, the load plan pivot2hist would use).
+    ``semantic`` type or ``None``, ``nunique``, ``null_frac``, ``examples``, and
+    ``distribution`` when requested), ``rows_profiled``, ``is_time_series``,
+    ``time_column``, and — for a file or DuckDB source — ``survey`` (disk size, estimated
+    memory, the load plan pivot2hist would use).
     """
+    from ._density import fit_distribution
     from ._io import load as _load
-    from ._profile import profile as _profile_fn
+    from ._profile import NUMERIC, profile as _profile_fn
     from ._survey import survey as _survey
 
     out: Dict[str, Any] = {}
@@ -130,8 +139,9 @@ def describe(
         if columns:
             frame = frame[list(columns)]
     prof = _profile_fn(frame)
-    out["columns"] = [
-        {
+    cols = []
+    for c in prof:
+        entry: Dict[str, Any] = {
             "name": c.name,
             "kind": c.kind,
             "semantic": c.semantic,
@@ -139,8 +149,11 @@ def describe(
             "null_frac": round(c.null_frac, 4),
             "examples": list(c.examples),
         }
-        for c in prof
-    ]
+        if distributions and c.kind == NUMERIC:
+            fit = fit_distribution(frame[c.name])
+            entry["distribution"] = {"family": fit.name, "params": {k: round(v, 6) for k, v in fit.params.items()}, "bic": round(fit.bic, 2)} if fit else None
+        cols.append(entry)
+    out["columns"] = cols
     out["rows_profiled"] = int(len(frame))
     out["is_time_series"] = bool(prof.is_time_series)
     out["time_column"] = prof.time_column
@@ -221,8 +234,11 @@ def suggest(
     """The ``n`` best layouts for this data, best first — the auto-guess menu.
 
     Use this when unsure which columns make a good pivot. Each candidate has a
-    ``description`` (e.g. ``"sum(bytes) by dst_ip (top 39) x rule"``) suitable for
-    picking by name and passing back into :func:`pivot` as explicit ``rows``/``cols``.
+    ``description`` (e.g. ``"sum(bytes) by dst_ip (top 39) x rule"``), a raw fit
+    ``score`` and a ``confidence`` (``"high"``/``"medium"``/``"low"``, from the gap to the
+    next-best candidate — ``"low"`` means the alternatives are genuinely close and worth
+    a look, not just a formality) suitable for picking by name and passing back into
+    :func:`pivot` as explicit ``rows``/``cols``.
     """
     from . import fit as _fit
 
@@ -231,14 +247,46 @@ def suggest(
         values=values, agg=agg, max_rows=max_rows, max_cols=max_cols, memory_budget_mb=memory_budget_mb, **opts,
     )
     v = _apply_filters(v, filters)
-    layouts = v.suggest(n)
+    ranked = v.suggest_ranked(n)
     return {
         "current": v.layout.describe(),
+        "confidence": v.confidence,
         "alternatives": [
-            {"rank": i, "description": lay.describe(), "rows": [d.column for d in lay.rows], "cols": [d.column for d in lay.cols], "measure": lay.measure}
-            for i, lay in enumerate(layouts)
+            {"rank": i, "description": lay.describe(), "score": round(sc, 3), "rows": [d.column for d in lay.rows], "cols": [d.column for d in lay.cols], "measure": lay.measure}
+            for i, (sc, lay) in enumerate(ranked)
         ],
     }
+
+
+def anomalies(
+    source: Source,
+    n: int = 10,
+    *,
+    rows: Optional[Sequence[str]] = None,
+    cols: Optional[Sequence[str]] = None,
+    values: Optional[str] = None,
+    agg: Optional[str] = None,
+    filters: Optional[Sequence[Filter]] = None,
+    max_rows: int = 40,
+    max_cols: int = 12,
+    memory_budget_mb: Optional[float] = None,
+    **opts: Any,
+) -> Dict[str, Any]:
+    """The ``n`` most surprising cells of the pivot: the biggest deviation from what
+    independence of the row and column axes would predict (a Pearson-style residual
+    against ``row_total x col_total / grand_total``). Needs an additive measure
+    (``sum``/``count``, the default). Positive ``residual`` = more than expected
+    (an unusually heavy combination — a way to spot, say, a port/action pair that fires
+    far more than its marginals alone would suggest); negative = less."""
+    from . import fit as _fit
+
+    v = _fit(
+        source, rows=list(rows) if rows is not None else None, cols=list(cols) if cols is not None else None,
+        values=values, agg=agg, max_rows=max_rows, max_cols=max_cols, memory_budget_mb=memory_budget_mb, **opts,
+    )
+    v = _apply_filters(v, filters)
+    df = v.anomalies(n)
+    return {"layout": v.layout.describe(), "cells": df.to_dict(orient="records")}
 
 
 def slicers(
@@ -260,4 +308,4 @@ def slicers(
     return {col: [{"value": val, "count": int(c)} for val, c in vals] for col, vals in raw.items()}
 
 
-__all__ = ["describe", "pivot", "suggest", "slicers", "FILTER_OPS"]
+__all__ = ["describe", "pivot", "suggest", "slicers", "anomalies", "FILTER_OPS"]

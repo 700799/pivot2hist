@@ -31,6 +31,7 @@ from ._fit import AGGS, COUNT, FitOptions, Layout
 from ._log import log
 from ._profile import BOOLEAN, CATEGORICAL, DATETIME, NUMERIC, profile
 from ._view import HIST, PIVOT, View
+from .ui_fields import make_field_list
 
 CHAINS = "chains"
 
@@ -57,6 +58,7 @@ class Explorer:
                                        "method": "kmeans", "cocluster": None}
         self.chain: Dict[str, Any] = {"state": None, "by": None, "time": None, "normalize": False}
         self.display: Dict[str, Any] = {**view.display, "width": width, "height": height}
+        self.field_slicers: List[str] = []
         self.refit_sliced = False
         self.history: List[Dict[str, Any]] = []
         self.view: View = view
@@ -80,11 +82,17 @@ class Explorer:
         self._log_lines = self._log_lines[-200:]
         self._refresh_log()
 
+    _LOG_THEME = {
+        "light": {"text": "#333", "bg": "#fafafa", "border": "#e5e5e5"},
+        "graphite": {"text": "#c7ccd6", "bg": "#1b2128", "border": "#333a45"},
+    }
+
     def _refresh_log(self) -> None:
         lines = "\n".join(_html.escape(l) for l in self._log_lines[-60:])
+        c = self._LOG_THEME.get(self.display.get("theme", "light"), self._LOG_THEME["light"])
         self.w_log.value = (
-            "<div style='font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;color:#333;background:#fafafa;"
-            "border:1px solid #e5e5e5;border-radius:4px;padding:6px 8px;height:120px;overflow-y:auto;white-space:pre;"
+            f"<div style='font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;color:{c['text']};background:{c['bg']};"
+            f"border:1px solid {c['border']};border-radius:6px;padding:6px 8px;height:120px;overflow-y:auto;white-space:pre;"
             "display:flex;flex-direction:column-reverse'>"
             f"<div>{lines}</div></div>"
         )
@@ -205,13 +213,41 @@ class Explorer:
         ])
 
         # -- style tab
-        self.w_heat = W.Dropdown(options=["table", "column", "row", "none"], value=str(self.display.get("heat", "table")), description="Heat", style=st)
+        self.w_theme = W.Dropdown(options=["light", "graphite"], value=str(self.display.get("theme", "light")), description="Theme", style=st)
+        self.w_heat = W.Dropdown(options=["table", "column", "row", "surprise", "none"], value=str(self.display.get("heat", "table")), description="Heat", style=st)
         self.w_totals = W.Checkbox(value=bool(self.display.get("totals", False)), description="totals")
         self.w_bars = W.Checkbox(value=bool(self.display.get("bars", False)), description="in-cell bars")
         self.w_compact = W.Checkbox(value=bool(self.display.get("compact", False)), description="compact numbers")
+        self.w_subtotals = W.Checkbox(value=bool(self.display.get("subtotals", False)), description="subtotals (nested rows)")
+        self.w_outline = W.Checkbox(value=bool(self.display.get("outline", False)), description="outline / collapsible groups")
         self.w_width = W.IntSlider(value=int(self.display.get("width", 760)), min=300, max=1600, step=20, description="Width", style=st)
         self.w_height = W.IntSlider(value=int(self.display.get("height", 340)), min=160, max=900, step=20, description="Height", style=st)
-        style_tab = W.VBox([W.HBox([self.w_heat, self.w_totals, self.w_bars, self.w_compact]), W.HBox([self.w_width, self.w_height])])
+        style_tab = W.VBox([
+            W.HBox([self.w_theme, self.w_heat, self.w_totals, self.w_bars, self.w_compact]),
+            W.HBox([self.w_subtotals, self.w_outline]),
+            W.HBox([self.w_width, self.w_height]),
+        ])
+
+        # -- fields tab: draggable columns with stats, dropped into Rows/Columns/Values/Slicers
+        def _col_of(x: Any) -> Optional[str]:
+            return x if isinstance(x, str) else (x.get("column") if isinstance(x, dict) else getattr(x, "column", None))
+
+        init_rows = [c for c in (_col_of(x) for x in (self.spec.get("rows") or [])) if c]
+        init_cols = [c for c in (_col_of(x) for x in (self.spec.get("cols") or [])) if c]
+        init_values = [self.spec["values"]] if self.spec.get("values") else []
+        self.w_fields = make_field_list(prof, theme=str(self.display.get("theme", "light")), rows=init_rows, cols=init_cols, values=init_values, slicers=[])
+        self.w_fields.observe(self._on_fields, names=["rows", "cols", "values", "slicers"])
+        self.w_field_slicer_box = W.VBox()
+        fields_tab = W.VBox([
+            W.HTML(
+                "<i>Drag fields into Rows / Columns / Values / Slicers — rows within rows and columns within "
+                "columns by dropping more than one field on an axis, in the order you drop them. Each chip shows "
+                "kind, semantic type, non-null count (n), distinct count (≠) and variety: distinct ÷ non-null, "
+                "as a small bar (a handful of repeated labels reads near-empty; an id-like column reads full).</i>"
+            ),
+            self.w_fields,
+            self.w_field_slicer_box,
+        ])
 
         # -- code, profile, data, stats tabs; output; log panel
         self.w_code = W.HTML()
@@ -224,9 +260,10 @@ class Explorer:
         self.w_stats_btn = W.Button(description="Refresh stats", icon="clock-o")
         stats_tab = W.VBox([W.HTML("<i>The seven costliest kinds of step so far (wall time, CPU time, peak memory delta).</i>"), self.w_stats_btn, self.w_stats])
 
-        self.tabs = W.Tab(children=[layout_tab, hist_tab, slice_tab, reduce_tab, chains_tab, style_tab, self.w_code, self.w_profile, self.w_data, stats_tab])
-        for i, t in enumerate(["Layout", "Histogram", "Slicers", "Reduce & cluster", "Chains", "Style", "Code", "Profile", "Data", "Stats"]):
+        self.tabs = W.Tab(children=[layout_tab, hist_tab, slice_tab, reduce_tab, chains_tab, style_tab, self.w_code, self.w_profile, self.w_data, stats_tab, fields_tab])
+        for i, t in enumerate(["Layout", "Histogram", "Slicers", "Reduce & cluster", "Chains", "Style", "Code", "Profile", "Data", "Stats", "Fields"]):
             self.tabs.set_title(i, t)
+        self.FIELDS_TAB = 10
         top = W.HBox([self.w_mode, self.w_best, self.w_suggest_btn, self.w_suggest, self.w_undo, self.w_reset])
         self.box = W.VBox([top, self.tabs, self.w_status, self.w_out, W.HTML("<b style='font-size:11px;color:#666'>log</b>"), self.w_log])
         self._refresh_data_tab()
@@ -245,7 +282,8 @@ class Explorer:
             w.observe(self._on_options, names="value")
         for w in (self.w_on, self.w_by, self.w_nbins):
             w.observe(self._on_hist, names="value")
-        for w in (self.w_stacked, self.w_density, self.w_logy, self.w_heat, self.w_totals, self.w_bars, self.w_compact, self.w_width, self.w_height):
+        for w in (self.w_stacked, self.w_density, self.w_logy, self.w_theme, self.w_heat, self.w_totals, self.w_bars,
+                  self.w_compact, self.w_subtotals, self.w_outline, self.w_width, self.w_height):
             w.observe(self._on_style, names="value")
         for _, (kind, w) in self.w_slicers.items():
             w.observe(self._on_slicers, names="value" if kind != "range" and kind != "days" else "index")
@@ -295,6 +333,8 @@ class Explorer:
             self.w_logy.value, self.w_heat.value = bool(d.get("log_y")), str(d.get("heat", "table"))
             self.w_totals.value, self.w_bars.value, self.w_compact.value = bool(d.get("totals")), bool(d.get("bars")), bool(d.get("compact"))
             self.w_width.value, self.w_height.value = int(d.get("width", 760)), int(d.get("height", 340))
+            self.w_theme.value = str(d.get("theme", "light"))
+            self.w_subtotals.value, self.w_outline.value = bool(d.get("subtotals")), bool(d.get("outline"))
             rows, cols = self.spec.get("rows"), self.spec.get("cols")
             def names(specs: Any) -> Tuple[str, ...]:
                 out = []
@@ -306,6 +346,9 @@ class Explorer:
 
             self.w_rows.value, self.w_cols.value = names(rows), names(cols)
             self.w_mode.value = self.mode
+            self.w_fields.theme = str(d.get("theme", "light"))
+            self.w_fields.set_zones(rows=list(names(rows)), cols=list(names(cols)),
+                                    values=[self.spec["values"]] if self.spec.get("values") else [], slicers=self.field_slicers)
         finally:
             self._syncing = False
 
@@ -414,7 +457,7 @@ class Explorer:
         if self.mode == HIST:
             h = {k: v for k, v in self.hist.items() if v}
             lines.append(f"v = v.histogram({_kw(h)})" if h else "v = v.toggle()")
-        defaults = {"density": True, "heat": "table"}
+        defaults = {"density": True, "heat": "table", "theme": "light"}
         disp = {k: v for k, v in self.display.items()
                 if k not in ("width", "height") and v not in (None, False) and defaults.get(k) != v}
         if disp:
@@ -431,6 +474,8 @@ class Explorer:
         self.w_code.value = "<pre style='font-size:12px'>" + _html.escape(self.code()) + "</pre>"
         self._sync_widgets()
         self._refresh_stats()
+        self._refresh_field_slicers()
+        self._refresh_log()  # picks up a theme change immediately, not just on the next log line
 
     def _refresh_stats(self) -> None:
         df = log.stats(7)
@@ -493,6 +538,13 @@ class Explorer:
                 self.w_values.value = lay.values if lay.values in [o[1] for o in self.w_values.options] else COUNT
                 if lay.values is not None:
                     self.w_agg.value = lay.agg
+            if self.mode != CHAINS:
+                self.w_fields.set_zones(
+                    rows=[d.column for d in lay.rows if d.column in self.w_rows.options],
+                    cols=[d.column for d in lay.cols if d.column in self.w_cols.options],
+                    values=[lay.values] if lay.values else [],
+                    slicers=self.field_slicers,
+                )
         finally:
             self._syncing = False
 
@@ -541,6 +593,40 @@ class Explorer:
             self.refit_sliced = False
         self._act(go)
 
+    def _on_fields(self, change: Any) -> None:
+        def go() -> None:
+            w = self.w_fields
+            rows, cols, values, slicers = list(w.rows), list(w.cols), list(w.values), list(w.slicers)
+            cols = [c for c in cols if c not in rows]
+            value = values[0] if values else None
+            self.spec = {
+                "rows": rows or None,
+                "cols": cols or None,
+                "values": value,
+                "agg": COUNT if value is None else self.w_agg.value,
+            }
+            self.field_slicers = slicers
+            self.refit_sliced = False
+            self._syncing = True
+            try:
+                self.w_rows.value = tuple(c for c in rows if c in self.w_rows.options)
+                self.w_cols.value = tuple(c for c in cols if c in self.w_cols.options)
+                if value is not None:
+                    self.w_values.value = value
+            finally:
+                self._syncing = False
+        self._act(go)
+
+    def _refresh_field_slicers(self) -> None:
+        rows = []
+        for name in self.field_slicers:
+            entry = self.w_slicers.get(name)
+            if entry is not None:
+                rows.append(W.VBox([W.HTML(f"<b style='font-size:11px'>{_html.escape(name)}</b>"), entry[1]]))
+            else:
+                rows.append(W.HTML(f"<span style='font-size:11px;color:#889'>{_html.escape(name)}: no quick filter built for this column — use the Slicers tab (query or top-N)</span>"))
+        self.w_field_slicer_box.children = rows
+
     def _on_options(self, change: Any) -> None:
         def go() -> None:
             self.options = self.options.replace(
@@ -559,9 +645,11 @@ class Explorer:
         def go() -> None:
             self.display.update(
                 stacked=self.w_stacked.value, density=self.w_density.value, log_y=self.w_logy.value,
-                heat=self.w_heat.value, totals=self.w_totals.value, bars=self.w_bars.value, compact=self.w_compact.value,
+                theme=self.w_theme.value, heat=self.w_heat.value, totals=self.w_totals.value, bars=self.w_bars.value,
+                compact=self.w_compact.value, subtotals=self.w_subtotals.value, outline=self.w_outline.value,
                 width=self.w_width.value, height=self.w_height.value,
             )
+            self.w_fields.theme = self.w_theme.value
         self._act(go)
 
     def _slices_from_widgets(self) -> List[Tuple[str, Any]]:
@@ -658,58 +746,80 @@ class Explorer:
         tab = self.tabs.selected_index if active_tab is None else active_tab
         if tab is None:
             tab = 0
+        theme = str(self.display.get("theme", "light"))
+        c = self._CHROME_THEME.get(theme, self._CHROME_THEME["light"])
 
         def render(w: Any) -> str:
             name = type(w).__name__
+            if name in ("FieldList", "FieldListFallback"):
+                return w.snapshot_html()
             if name in ("VBox", "HBox", "Box"):
                 direction = "column" if name == "VBox" else "row"
-                inner = "".join(render(c) for c in w.children)
+                inner = "".join(render(x) for x in w.children)
                 return f"<div style='display:flex;flex-direction:{direction};flex-wrap:wrap;gap:6px;align-items:flex-start;margin:2px 0'>{inner}</div>"
             if name == "Tab":
                 heads = "".join(
-                    f"<span style='padding:4px 10px;border:1px solid #ccc;border-bottom:{'none' if i == tab else '1px solid #ccc'};"
-                    f"background:{'#fff' if i == tab else '#f1f1f1'};font-weight:{600 if i == tab else 400}'>{_html.escape(w.get_title(i) or str(i))}</span>"
+                    f"<span style='padding:5px 12px;border:1px solid {c['border']};border-bottom:{'none' if i == tab else '1px solid ' + c['border']};"
+                    f"border-radius:8px 8px 0 0;background:{c['panel'] if i == tab else c['bg']};color:{c['text']};"
+                    f"font-weight:{600 if i == tab else 400}'>{_html.escape(w.get_title(i) or str(i))}</span>"
                     for i in range(len(w.children))
                 )
                 body = render(w.children[tab]) if w.children else ""
-                return f"<div><div style='display:flex;gap:2px'>{heads}</div><div style='border:1px solid #ccc;padding:8px'>{body}</div></div>"
+                return (
+                    f"<div><div style='display:flex;gap:2px'>{heads}</div>"
+                    f"<div style='border:1px solid {c['border']};border-radius:0 8px 8px 8px;padding:10px;background:{c['panel']}'>{body}</div></div>"
+                )
             if name == "HTML":
-                return f"<div>{w.value}</div>"
+                return f"<div style='color:{c['text']}'>{w.value}</div>"
             desc = _html.escape(str(getattr(w, "description", "") or ""))
-            label = f"<label style='color:#555;margin-right:4px'>{desc}</label>" if desc else ""
+            label = f"<label style='color:{c['muted']};margin-right:4px'>{desc}</label>" if desc else ""
             if name == "Button":
-                return f"<button style='padding:3px 10px;border:1px solid #bbb;border-radius:3px;background:#f7f7f7'>{desc}</button>"
+                return f"<button style='padding:4px 12px;border:1px solid {c['border']};border-radius:8px;background:{c['field']};color:{c['text']}'>{desc}</button>"
             if name == "ToggleButtons":
                 btns = "".join(
-                    f"<span style='padding:3px 10px;border:1px solid #bbb;background:{'#4a7ebb' if v == w.value else '#f7f7f7'};color:{'#fff' if v == w.value else '#222'}'>{_html.escape(str(lab))}</span>"
+                    f"<span style='padding:4px 12px;border:1px solid {c['border']};background:{c['accent'] if v == w.value else c['field']};"
+                    f"color:{c['on_accent'] if v == w.value else c['text']}'>{_html.escape(str(lab))}</span>"
                     for lab, v in (w.options if isinstance(w.options[0], tuple) else [(o, o) for o in w.options])
                 )
-                return f"<span style='display:inline-flex'>{btns}</span>"
+                return f"<span style='display:inline-flex;border-radius:8px;overflow:hidden'>{btns}</span>"
             if name in ("Dropdown",):
                 opts = w.options if (w.options and isinstance(w.options[0], tuple)) else [(o, o) for o in w.options]
                 items = "".join(f"<option{' selected' if v == w.value else ''}>{_html.escape(str(lab))}</option>" for lab, v in opts[:60])
-                return f"<span>{label}<select>{items}</select></span>"
+                return f"<span>{label}<select style='{c['input_style']}'>{items}</select></span>"
             if name == "SelectMultiple":
                 opts = w.options if (w.options and isinstance(w.options[0], tuple)) else [(o, o) for o in w.options]
                 items = "".join(f"<option{' selected' if v in w.value else ''}>{_html.escape(str(lab))}</option>" for lab, v in opts[:60])
-                return f"<span>{label}<select multiple size='{min(6, max(2, len(opts)))}'>{items}</select></span>"
+                return f"<span>{label}<select multiple size='{min(6, max(2, len(opts)))}' style='{c['input_style']}'>{items}</select></span>"
             if name == "Checkbox":
-                return f"<label><input type='checkbox'{' checked' if w.value else ''}> {desc}</label>"
+                return f"<label style='color:{c['text']}'><input type='checkbox'{' checked' if w.value else ''}> {desc}</label>"
             if name in ("IntSlider", "FloatSlider"):
-                return f"<span>{label}<input type='range' min='{w.min}' max='{w.max}' value='{w.value}'> <b>{w.value}</b></span>"
+                return f"<span style='color:{c['text']}'>{label}<input type='range' min='{w.min}' max='{w.max}' value='{w.value}'> <b>{w.value}</b></span>"
             if name == "SelectionRangeSlider":
                 lo, hi = w.index
                 labs = [o[0] if isinstance(o, tuple) else str(o) for o in w.options]
-                return f"<span>{label}<input type='range' min='0' max='{len(labs) - 1}' value='{lo}'> <b>{_html.escape(labs[lo])} .. {_html.escape(labs[hi])}</b></span>"
+                return f"<span style='color:{c['text']}'>{label}<input type='range' min='0' max='{len(labs) - 1}' value='{lo}'> <b>{_html.escape(labs[lo])} .. {_html.escape(labs[hi])}</b></span>"
             if name == "Text":
-                return f"<span>{label}<input type='text' value='{_html.escape(w.value)}' placeholder='{_html.escape(w.placeholder or '')}' size='48'></span>"
-            return f"<span>{label}{_html.escape(str(getattr(w, 'value', '')))}</span>"
+                return f"<span>{label}<input type='text' value='{_html.escape(w.value)}' placeholder='{_html.escape(w.placeholder or '')}' size='48' style='{c['input_style']}'></span>"
+            return f"<span style='color:{c['text']}'>{label}{_html.escape(str(getattr(w, 'value', '')))}</span>"
 
         body = render(self.box)
         return (
-            "<div style='font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:12px;"
-            f"max-width:1100px'>{body}</div>"
+            f"<div style='font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:12px;"
+            f"max-width:1150px;background:{c['bg']};color:{c['text']};padding:14px;border-radius:12px'>{body}</div>"
         )
+
+    _CHROME_THEME = {
+        "light": {
+            "bg": "#ffffff", "panel": "#ffffff", "field": "#f7f7f7", "border": "#ccc",
+            "text": "#222", "muted": "#555", "accent": "#4a7ebb", "on_accent": "#fff",
+            "input_style": "border:1px solid #ccc;border-radius:6px;padding:2px 4px;background:#fff;color:#222",
+        },
+        "graphite": {
+            "bg": "#161a20", "panel": "#1b2128", "field": "#20262e", "border": "#333a45",
+            "text": "#e5e9ef", "muted": "#98a1b0", "accent": "#5b9be0", "on_accent": "#0f1216",
+            "input_style": "border:1px solid #333a45;border-radius:6px;padding:2px 4px;background:#20262e;color:#e5e9ef",
+        },
+    }
 
     # ------------------------------------------------------------------ display
 

@@ -19,7 +19,8 @@ from . import _binning as B
 from ._cluster import METHODS, cluster_frame, cluster_rows, cocluster as _cocluster
 from ._fit import COUNT, Dim, DimSpec, FitOptions, Layout, build_table, default_agg, fit_layout, freeze, materialize, plan_dim
 from ._fit import _resolve_axis, suggest_layouts
-from ._html import hist_svg, pivot_html
+from ._density import DistFit
+from ._html import expected_independence, hist_svg, pivot_html, surprise_residuals
 from ._log import log
 from ._log import stats as _log_stats
 from ._profile import BOOLEAN, CATEGORICAL, DATETIME, NUMERIC, Profile, profile
@@ -695,13 +696,38 @@ class View:
 
     # ------------------------------------------------------------------ auto-guess
 
-    def suggest(self, n: int = 5) -> List[Layout]:
-        """The ``n`` best distinct layouts for the sliced data, best first."""
+    def suggest_ranked(self, n: int = 5) -> List[Tuple[float, Layout]]:
+        """Like :meth:`suggest` but keeps each candidate's raw fit score, best first.
+
+        The score is the auto-fit's internal objective (entropy plus mutual information,
+        minus sparsity/aspect/layer/other-bucket penalties, see
+        ``pivot2hist.DEFAULT_WEIGHTS``): higher is better, comparable only *within* one
+        call on one dataset, not across datasets or box sizes.
+        """
         spec = {k: self._spec.get(k) for k in ("rows", "cols", "values", "agg")}
         if self.data.empty:
-            return [self._layout]
-        out = [lay for _, lay in suggest_layouts(self.data, self._options, n, prof=self.profile, **spec)]
-        return out or [self._layout]
+            return [(0.0, self._layout)]
+        out = suggest_layouts(self.data, self._options, n, prof=self.profile, **spec)
+        return out or [(0.0, self._layout)]
+
+    def suggest(self, n: int = 5) -> List[Layout]:
+        """The ``n`` best distinct layouts for the sliced data, best first."""
+        return [lay for _, lay in self.suggest_ranked(n)]
+
+    @property
+    def confidence(self) -> str:
+        """How much better the current layout scores than the runner-up: ``"high"``,
+        ``"medium"`` or ``"low"`` — a small gap means alternatives are worth a look
+        (see :meth:`suggest`)."""
+        ranked = self.suggest_ranked(2)
+        if len(ranked) < 2:
+            return "high"
+        gap = ranked[0][0] - ranked[1][0]
+        if gap >= 0.75:
+            return "high"
+        if gap >= 0.25:
+            return "medium"
+        return "low"
 
     def alternatives(self, n: int = 5) -> List["View"]:
         """:meth:`suggest` as ready-made views."""
@@ -1005,9 +1031,12 @@ class View:
     def style(self, **display: Any) -> "View":
         """Display options for :meth:`html` / notebooks.
 
-        Pivot: ``heat`` (``"table"`` | ``"column"`` | ``"row"`` | ``"none"``), ``bars``,
-        ``totals``, ``compact``, ``max_rows``. Histogram: ``stacked``, ``density``,
-        ``log_y``, ``width``, ``height``, ``show_values``.
+        ``theme``: ``"light"`` (default) or ``"graphite"`` (a dark, modern theme), both
+        apply to pivots and histograms alike. Pivot: ``heat`` (``"table"`` | ``"column"``
+        | ``"row"`` | ``"none"``), ``bars``, ``totals``, ``compact``, ``max_rows``,
+        ``subtotals`` (a subtotal row after each outer row group), ``outline`` (nested
+        rows as collapsible groups). Histogram: ``stacked``, ``density``, ``log_y``,
+        ``width``, ``height``, ``show_values``.
         """
         return self._clone(display={**self._display, **display})
 
@@ -1035,15 +1064,64 @@ class View:
             return hist_svg(
                 table, title=t, width=int(d.get("width", 760)), height=int(d.get("height", 340)), density=density,
                 stacked=bool(d.get("stacked", False)), log_y=bool(d.get("log_y", False)), show_values=d.get("show_values"),
+                theme=str(d.get("theme", "light")),
             )
         return pivot_html(
             self.pivot(), title=t, heat=str(d.get("heat", "table")), bars=bool(d.get("bars", False)),
             totals=bool(d.get("totals", False)), compact=bool(d.get("compact", False)), max_rows=d.get("max_rows"),
+            subtotals=bool(d.get("subtotals", False)), outline=bool(d.get("outline", False)),
+            agg=self._layout.agg if self._layout.values is not None else "count", theme=str(d.get("theme", "light")),
         )
 
     def svg(self) -> str:
         """The histogram of this view as SVG (toggles to histogram mode if needed)."""
         return self.as_hist().html()
+
+    def distribution(self, column: str, **kw: Any) -> Optional[DistFit]:
+        """Best-fitting probability distribution for a numeric column of the sliced data
+        (BIC over normal/lognormal/exponential/gamma/uniform/poisson/geometric/bernoulli/
+        discrete-uniform), or ``None`` if there isn't enough data. See
+        :func:`pivot2hist.fit_distribution`."""
+        from ._density import fit_distribution
+
+        if column not in self.data.columns:
+            raise KeyError(f"unknown column {column!r}")
+        return fit_distribution(self.data[column], **kw)
+
+    def anomalies(self, n: int = 10) -> pd.DataFrame:
+        """The ``n`` most surprising cells: biggest deviation from what independence of
+        the row and column axes would predict (``row_total x col_total / grand_total``),
+        as a Pearson-style residual. Needs a 2-D pivot (both axes present) and an additive
+        measure (``sum``/``count`` — the only aggregations independence expectation means
+        anything for). Positive ``residual`` = more than expected, negative = less.
+
+        Pairs with ``v.style(heat="surprise")``, which colours every cell by the same
+        residual instead of raw magnitude.
+        """
+        t = self.pivot()
+        if t.shape[0] < 2 or t.shape[1] < 2:
+            raise ValueError("anomalies() needs at least 2 rows and 2 columns")
+        agg = self._layout.agg if self._layout.values is not None else "count"
+        if agg not in ("sum", "count"):
+            raise ValueError(f"anomalies() needs an additive measure (sum/count), not {agg!r}")
+        values = t.to_numpy(dtype=float)
+        expected = expected_independence(values)
+        resid = surprise_residuals(values)
+        row_label = ["/".join(map(str, t.index[i])) if t.index.nlevels > 1 else str(t.index[i]) for i in range(len(t.index))]
+        col_label = ["/".join(map(str, t.columns[j])) if t.columns.nlevels > 1 else str(t.columns[j]) for j in range(len(t.columns))]
+        order = np.argsort(-np.abs(resid), axis=None)[: max(1, n)]
+        rows = []
+        for flat in order:
+            i, j = np.unravel_index(int(flat), resid.shape)
+            v = float(values[i, j])
+            if not np.isfinite(v):
+                continue
+            rows.append({
+                "row": row_label[i], "col": col_label[j], "observed": v,
+                "expected": round(float(expected[i, j]), 3), "residual": round(float(resid[i, j]), 3),
+                "direction": "over" if resid[i, j] > 0 else "under",
+            })
+        return pd.DataFrame(rows, columns=["row", "col", "observed", "expected", "residual", "direction"])
 
     def _repr_html_(self) -> str:
         return self.html()

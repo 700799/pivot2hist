@@ -47,12 +47,16 @@ def describe(
     source: str,
     columns: Optional[List[str]] = None,
     memory_budget_mb: Optional[float] = None,
+    distributions: bool = False,
 ) -> Dict[str, Any]:
     """Profile a data source: column kinds, semantic types (IP, port, URL, email ...),
     cardinality, nulls, and whether it's a regular time series. Cheap even on huge files:
     reads only a bounded sample, never the whole thing. ``source`` is a file path
-    (csv/tsv/json/jsonl/parquet) or a ``duckdb://path?table=name`` URL."""
-    return _agent.describe(source, columns=columns, memory_budget_mb=memory_budget_mb)
+    (csv/tsv/json/jsonl/parquet) or a ``duckdb://path?table=name`` URL. With
+    distributions=True, also fits a probability distribution (normal, lognormal,
+    exponential, gamma, uniform, poisson, geometric, bernoulli...) to each numeric
+    column by BIC — slower, so off by default."""
+    return _agent.describe(source, columns=columns, memory_budget_mb=memory_budget_mb, distributions=distributions)
 
 
 @server.tool()
@@ -97,6 +101,21 @@ def slicers(source: str, columns: Optional[List[str]] = None, top: int = 10) -> 
     """The most frequent values (with counts) per label-like column, for building
     pivot()'s `filters`."""
     return _agent.slicers(source, columns=columns, top=top)
+
+
+@server.tool()
+def anomalies(
+    source: str,
+    n: int = 10,
+    rows: Optional[List[str]] = None,
+    cols: Optional[List[str]] = None,
+    filters: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """The n most surprising cells of a pivot: the biggest deviation between what's
+    actually there and what independence of the row and column axes would predict (a
+    heavy port/action combination that fires far more than its row and column totals
+    alone would suggest, for instance). Needs at least 2 rows and 2 columns."""
+    return _agent.anomalies(source, n, rows=rows, cols=cols, filters=filters)
 
 
 def main() -> None:

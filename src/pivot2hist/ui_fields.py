@@ -76,7 +76,7 @@ def chip_html(f: Dict[str, Any], *, removable: bool = False, drag: bool = True) 
     )
 
 
-def zones_html(fields: List[Dict[str, Any]], zones: Dict[str, List[str]], *, interactive: bool = True) -> str:
+def zones_html(fields: List[Dict[str, Any]], zones: Dict[str, List[str]], *, interactive: bool = True, theme: str = "light") -> str:
     """Static HTML for the pane: the pool of unused fields plus the four zones."""
     by = {f["name"]: f for f in fields}
     used = {n for z in zones.values() for n in z}
@@ -90,37 +90,75 @@ def zones_html(fields: List[Dict[str, Any]], zones: Dict[str, List[str]], *, int
             f"<div class='p2h-zone' data-zone='{z}'><div class='p2h-zone-title'>{ZONE_TITLES[z]}</div>"
             f"<div class='p2h-zone-body'>{body}</div></div>"
         )
+    css = theme_style_block(theme, selector=".p2h-fields-scope") + f"<style>{FIELDS_CSS}</style>"
     return (
+        f"<div class='p2h-fields-scope' style='background:var(--p2h-bg,#fff);padding:8px;border-radius:12px'>{css}"
         "<div class='p2h-fields'>"
         "<div class='p2h-pool'><div class='p2h-zone-title'>Fields <input class='p2h-search' placeholder='search'/></div>"
         f"<div class='p2h-pool-body'>{pool}</div></div>"
-        f"<div class='p2h-zones'>{''.join(zone_blocks)}</div></div>"
+        f"<div class='p2h-zones'>{''.join(zone_blocks)}</div></div></div>"
     )
+
+
+#: CSS custom properties per theme; :func:`theme_style_block` emits one as a scoped
+#: ``<style>`` block so the field list (and anything else using the same ``--p2h-*``
+#: tokens) can switch between a light and a graphite look without editing markup.
+FIELD_THEMES = {
+    "light": {
+        "bg": "#ffffff", "panel": "#fbfcfd", "border": "#dfe4ea", "text": "#1f2937",
+        "muted": "#667", "accent": "#0072B2", "accent-soft": "#e8f1fa", "chip": "#ffffff",
+        "var-track": "#e5eaf0", "danger": "#c00", "hint": "#99a",
+    },
+    "graphite": {
+        "bg": "#161a20", "panel": "#1b2128", "border": "#333a45", "text": "#e5e9ef",
+        "muted": "#98a1b0", "accent": "#5b9be0", "accent-soft": "#22384d", "chip": "#1e242c",
+        "var-track": "#2a313b", "danger": "#e8785a", "hint": "#7a8494",
+    },
+}
+
+
+def theme_style_block(theme: str = "light", *, selector: str = ":root") -> str:
+    """A ``<style>`` block defining the ``--p2h-*`` custom properties for ``theme``."""
+    vars_ = FIELD_THEMES.get(theme, FIELD_THEMES["light"])
+    decls = ";".join(f"--p2h-{k}:{v}" for k, v in vars_.items())
+    return f"<style>{selector}{{{decls}}}</style>"
 
 
 FIELDS_CSS = """
 .p2h-fields{display:flex;gap:10px;align-items:stretch;font-size:12px}
 .p2h-pool{flex:0 0 250px;display:flex;flex-direction:column;min-height:120px}
-.p2h-pool-body{overflow-y:auto;max-height:330px;display:flex;flex-direction:column;gap:4px;padding:6px;border:1px dashed var(--p2h-border,#cfd6df);border-radius:8px;background:var(--p2h-panel,#fbfcfd)}
+.p2h-pool-body{overflow-y:auto;max-height:330px;display:flex;flex-direction:column;gap:4px;padding:6px;border:1px dashed var(--p2h-border,#cfd6df);border-radius:10px;background:var(--p2h-panel,#fbfcfd)}
 .p2h-zones{flex:1;display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .p2h-zone{display:flex;flex-direction:column;min-height:60px}
 .p2h-zone-title{font-weight:600;color:var(--p2h-muted,#556);margin:0 0 4px 2px;display:flex;justify-content:space-between;align-items:center}
-.p2h-zone-body{flex:1;display:flex;flex-direction:column;gap:4px;padding:6px;border:1px dashed var(--p2h-border,#cfd6df);border-radius:8px;background:var(--p2h-panel,#fbfcfd);min-height:40px}
+.p2h-zone-body{flex:1;display:flex;flex-direction:column;gap:4px;padding:6px;border:1px dashed var(--p2h-border,#cfd6df);border-radius:10px;background:var(--p2h-panel,#fbfcfd);min-height:40px;transition:border-color .12s,background .12s}
 .p2h-zone-body.p2h-over,.p2h-pool-body.p2h-over{border-color:var(--p2h-accent,#0072B2);background:var(--p2h-accent-soft,#e8f1fa)}
-.p2h-hint{color:#99a;font-style:italic;padding:2px 4px}
-.p2h-chip{display:grid;grid-template-columns:8px minmax(70px,1.4fr) minmax(60px,1fr) auto auto 46px auto;gap:6px;align-items:center;padding:4px 8px;border-radius:6px;background:var(--p2h-chip,#fff);border:1px solid var(--p2h-border,#dfe4ea);cursor:grab;box-shadow:0 1px 1px rgba(0,0,0,.04)}
+.p2h-hint{color:var(--p2h-hint,#99a);font-style:italic;padding:2px 4px}
+.p2h-chip{display:grid;grid-template-columns:8px minmax(70px,1.4fr) minmax(60px,1fr) auto auto 46px auto;gap:6px;align-items:center;padding:4px 8px;border-radius:8px;background:var(--p2h-chip,#fff);color:var(--p2h-text,#1f2937);border:1px solid var(--p2h-border,#dfe4ea);cursor:grab;box-shadow:0 1px 2px rgba(0,0,0,.06);transition:box-shadow .12s,transform .12s}
+.p2h-chip:hover{box-shadow:0 2px 6px rgba(0,0,0,.12)}
 .p2h-chip.p2h-dragging{opacity:.5}
 .p2h-dot{width:8px;height:8px;border-radius:50%}
 .p2h-name{font-weight:600;color:var(--p2h-text,#1f2937);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .p2h-kind{color:var(--p2h-muted,#667);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:11px}
 .p2h-stat{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;color:var(--p2h-muted,#556);white-space:nowrap}
-.p2h-var{display:inline-block;height:6px;background:#e5eaf0;border-radius:3px;overflow:hidden}
-.p2h-var span{display:block;height:6px;background:linear-gradient(90deg,#56B4E9,#0072B2)}
-.p2h-x{cursor:pointer;color:#99a;font-weight:700;padding:0 2px}.p2h-x:hover{color:#c00}
-.p2h-search{font-size:11px;padding:2px 6px;border:1px solid var(--p2h-border,#dfe4ea);border-radius:6px;width:110px}
+.p2h-var{display:inline-block;height:6px;background:var(--p2h-var-track,#e5eaf0);border-radius:3px;overflow:hidden}
+.p2h-var span{display:block;height:6px;background:linear-gradient(90deg,#56B4E9,var(--p2h-accent,#0072B2))}
+.p2h-x{cursor:pointer;color:var(--p2h-hint,#99a);font-weight:700;padding:0 2px}.p2h-x:hover{color:var(--p2h-danger,#c00)}
+.p2h-search{font-size:11px;padding:3px 8px;border:1px solid var(--p2h-border,#dfe4ea);border-radius:8px;width:110px;background:var(--p2h-bg,#fff);color:var(--p2h-text,#1f2937)}
 """
 
 _ESM = r"""
+const THEME_VARS = {
+  light: { bg: "#ffffff", panel: "#fbfcfd", border: "#dfe4ea", text: "#1f2937", muted: "#667", accent: "#0072B2", "accent-soft": "#e8f1fa", chip: "#ffffff", "var-track": "#e5eaf0", danger: "#c00", hint: "#99a" },
+  graphite: { bg: "#161a20", panel: "#1b2128", border: "#333a45", text: "#e5e9ef", muted: "#98a1b0", accent: "#5b9be0", "accent-soft": "#22384d", chip: "#1e242c", "var-track": "#2a313b", danger: "#e8785a", hint: "#7a8494" },
+};
+function applyTheme(el, theme) {
+  const vars = THEME_VARS[theme] || THEME_VARS.light;
+  for (const [k, v] of Object.entries(vars)) el.style.setProperty(`--p2h-${k}`, v);
+  el.style.background = "var(--p2h-bg)";
+  el.style.borderRadius = "12px";
+  el.style.padding = "8px";
+}
 function render({ model, el }) {
   const ZONES = ["rows", "cols", "values", "slicers"];
   const TITLES = { rows: "Rows", cols: "Columns", values: "Values", slicers: "Slicers" };
@@ -166,6 +204,7 @@ function render({ model, el }) {
     });
   }
   function draw() {
+    applyTheme(el, model.get("theme") || "light");
     const fields = model.get("fields") || [];
     const by = Object.fromEntries(fields.map((f) => [f.name, f]));
     const s = state();
@@ -189,7 +228,7 @@ function render({ model, el }) {
     }
     root.appendChild(zones); el.appendChild(root);
   }
-  for (const k of ["fields", ...ZONES]) model.on(`change:${k}`, draw);
+  for (const k of ["fields", ...ZONES, "theme"]) model.on(`change:${k}`, draw);
   draw();
 }
 export default { render };
@@ -217,6 +256,7 @@ try:
         cols = T.List(T.Unicode()).tag(sync=True)
         values = T.List(T.Unicode()).tag(sync=True)
         slicers = T.List(T.Unicode()).tag(sync=True)
+        theme = T.Unicode("light").tag(sync=True)
 
         def set_zones(self, **zones: Sequence[str]) -> None:
             """Set several zones at once without firing a change per zone."""
@@ -225,7 +265,7 @@ try:
                     setattr(self, k, list(v))
 
         def snapshot_html(self) -> str:
-            return zones_html(self.fields, {z: list(getattr(self, z)) for z in ZONES})
+            return zones_html(self.fields, {z: list(getattr(self, z)) for z in ZONES}, theme=self.theme)
 
     HAS_ANYWIDGET = True
 except ImportError:  # pragma: no cover - exercised only without anywidget
@@ -246,10 +286,11 @@ class FieldListFallback(W.VBox):
     values = T.List(T.Unicode())
     slicers = T.List(T.Unicode())
 
-    def __init__(self, fields: List[Dict[str, Any]], **zones: Sequence[str]):
+    def __init__(self, fields: List[Dict[str, Any]], *, theme: str = "light", **zones: Sequence[str]):
         super().__init__()
         self._by = {f["name"]: f for f in fields}
         self._syncing = False
+        self.theme = theme
         self.fields = list(fields)
         self._boxes: Dict[str, W.VBox] = {}
         self._adds: Dict[str, W.Dropdown] = {}
@@ -316,7 +357,8 @@ class FieldListFallback(W.VBox):
                 up.on_click(lambda _, z=z, n=name: self._shift(z, n, -1))
                 down.on_click(lambda _, z=z, n=name: self._shift(z, n, +1))
                 rm.on_click(lambda _, n=name: self.move(n, None))
-                rows.append(W.HBox([W.HTML(f"<style>{FIELDS_CSS}</style>" + chip_html(f, drag=False)), up, down, rm]))
+                preview = theme_style_block(self.theme, selector=".p2h-fb-chip") + f"<style>{FIELDS_CSS}</style><div class='p2h-fb-chip'>{chip_html(f, drag=False)}</div>"
+                rows.append(W.HBox([W.HTML(preview), up, down, rm]))
             self._boxes[z].children = rows or [W.HTML("<span style='color:#99a;font-style:italic'>empty</span>")]
 
     def set_zones(self, **zones: Sequence[str]) -> None:
@@ -325,17 +367,20 @@ class FieldListFallback(W.VBox):
                 setattr(self, k, list(v))
 
     def snapshot_html(self) -> str:
-        return zones_html(self.fields, {z: list(getattr(self, z)) for z in ZONES}, interactive=False)
+        return zones_html(self.fields, {z: list(getattr(self, z)) for z in ZONES}, interactive=False, theme=self.theme)
 
 
-def make_field_list(profile: Profile, *, prefer_anywidget: bool = True, **zones: Sequence[str]):
+def make_field_list(profile: Profile, *, prefer_anywidget: bool = True, theme: str = "light", **zones: Sequence[str]):
     """The best available fields pane for ``profile``."""
     fields = field_stats(profile)
     if prefer_anywidget and HAS_ANYWIDGET and FieldList is not None:
-        w = FieldList(fields=fields)
+        w = FieldList(fields=fields, theme=theme)
         w.set_zones(**zones)
         return w
-    return FieldListFallback(fields, **zones)
+    return FieldListFallback(fields, theme=theme, **zones)
 
 
-__all__ = ["FieldList", "FieldListFallback", "make_field_list", "field_stats", "chip_html", "zones_html", "FIELDS_CSS", "ZONES", "HAS_ANYWIDGET"]
+__all__ = [
+    "FieldList", "FieldListFallback", "make_field_list", "field_stats", "chip_html", "zones_html",
+    "theme_style_block", "FIELDS_CSS", "FIELD_THEMES", "ZONES", "HAS_ANYWIDGET",
+]

@@ -137,3 +137,87 @@ def test_explorer_on_paged_source(tmp_path):
     ex.w_sample.value = 1000
     assert ex.view.paged is None and len(ex.view.source) == 1000
     ex.close()
+
+
+def test_fields_tab_present_and_synced_with_layout(ex, fw):
+    assert ex.tabs.get_title(ex.FIELDS_TAB) == "Fields"
+    assert list(ex.w_fields.rows) == [d.column for d in ex.view.layout.rows if d.column in ex.w_rows.options]
+    assert list(ex.w_fields.cols) == [d.column for d in ex.view.layout.cols if d.column in ex.w_cols.options]
+
+
+def test_dragging_fields_updates_the_layout_rows_within_rows(ex, fw):
+    ex.w_fields.rows = ["src_ip", "dst_port"]
+    ex.w_fields.cols = ["action"]
+    ex.w_fields.values = ["bytes"]
+    assert ex.spec["rows"] == ["src_ip", "dst_port"] and ex.spec["cols"] == ["action"]
+    assert [d.column for d in ex.view.layout.rows] == ["src_ip", "dst_port"]
+    assert list(ex.w_rows.value) == ["src_ip", "dst_port"]  # Layout tab mirrors the drop
+    ex.w_fields.cols = ["action", "protocol"]  # columns within columns
+    assert [d.column for d in ex.view.layout.cols] == ["action", "protocol"]
+
+
+def test_fields_values_zone_holds_one_measure(ex, fw):
+    ex.w_fields.values = ["bytes"]
+    assert ex.view.layout.measure == "sum(bytes)"
+    ex.w_fields.values = ["duration"]
+    assert ex.view.layout.measure.endswith("(duration)")
+
+
+def test_fields_slicers_zone_mirrors_widget(ex, fw):
+    ex.w_fields.slicers = ["action"]
+    assert ex.field_slicers == ["action"]
+    assert len(ex.w_field_slicer_box.children) == 1
+    ex.w_fields.slicers = []
+    assert len(ex.w_field_slicer_box.children) == 0
+
+
+def test_best_fit_resyncs_fields_pane(ex, fw):
+    ex.w_fields.rows = ["country"]
+    ex.w_best.click()
+    assert ex.spec["rows"] is None
+    assert list(ex.w_fields.rows) == [d.column for d in ex.view.layout.rows]
+
+
+def test_undo_reset_restore_fields_pane(ex, fw):
+    before_rows = list(ex.w_fields.rows)
+    ex.w_fields.cols = ["protocol"]
+    ex.w_undo.click()
+    assert list(ex.w_fields.rows) == before_rows
+
+
+def test_theme_toggle(ex, fw):
+    assert ex.w_theme.value == "light"
+    ex.w_theme.value = "graphite"
+    assert ex.display["theme"] == "graphite"
+    assert "#161a20" in ex.w_out.value or "#1b2128" in ex.w_out.value
+    assert ex.w_fields.theme == "graphite"
+    assert "v.style(theme='graphite')" in ex.code()
+    ex.w_theme.value = "light"
+    assert "theme=" not in ex.code()  # default theme omitted from the reproducing code
+
+
+def test_subtotals_and_outline_toggles(fw):
+    v = p2h.fit(fw, rows=["severity", "action"], cols=["protocol"], agg="count", max_rows=15)
+    ex = explore(v)
+    ex.w_subtotals.value = True
+    assert "∑" in ex.w_out.value
+    ex.w_subtotals.value = False
+    ex.w_outline.value = True
+    assert "<details" in ex.w_out.value
+    ex.close()
+
+
+def test_snapshot_html_themes_the_chrome(ex, fw):
+    light = ex.snapshot_html()
+    ex.w_theme.value = "graphite"
+    dark = ex.snapshot_html()
+    assert light != dark
+    assert "background:#161a20" in dark
+    assert "src_ip" in dark or "dst_port" in dark  # the fields pane rendered inside
+
+
+def test_fields_tab_survives_reset(ex, fw):
+    first_rows = list(ex.w_fields.rows)
+    ex.w_fields.rows = ["country", "protocol"]
+    ex.w_reset.click()
+    assert list(ex.w_fields.rows) == first_rows

@@ -128,7 +128,7 @@ def test_mcp_tools_registered(mcp_server_module):
 
     tools = asyncio.run(mcp_server_module.server.list_tools())
     names = {t.name for t in tools}
-    assert names == {"describe", "pivot", "suggest", "slicers"}
+    assert names == {"describe", "pivot", "suggest", "slicers", "anomalies"}
     for t in tools:
         assert t.description and len(t.description) > 10
 
@@ -157,3 +157,54 @@ def test_mcp_call_tool_roundtrip(mcp_server_module, tmp_path, fw):
     assert "alternatives" in d3 and len(d3["alternatives"]) <= 3
     d4 = json.loads(r4.content[0].text)
     assert "action" in d4
+
+
+def test_agent_describe_distributions(fw):
+    d = agent.describe(fw, distributions=True)
+    _assert_json_safe(d)
+    bytes_col = next(c for c in d["columns"] if c["name"] == "bytes")
+    assert bytes_col["distribution"] is not None
+    assert bytes_col["distribution"]["family"] in p2h.DIST_FAMILIES
+    assert isinstance(bytes_col["distribution"]["params"], dict)
+    non_numeric = next(c for c in d["columns"] if c["name"] == "action")
+    assert "distribution" not in non_numeric
+    plain = agent.describe(fw)
+    assert "distribution" not in plain["columns"][0]
+
+
+def test_agent_suggest_has_confidence_and_scores(fw):
+    s = agent.suggest(fw, 4)
+    _assert_json_safe(s)
+    assert s["confidence"] in ("high", "medium", "low")
+    scores = [a["score"] for a in s["alternatives"]]
+    assert scores == sorted(scores, reverse=True)
+
+
+def test_agent_anomalies(fw):
+    a = agent.anomalies(fw, 5, rows=["dst_port"], cols=["action"], agg="count")
+    _assert_json_safe(a)
+    assert len(a["cells"]) == 5
+    assert set(a["cells"][0].keys()) == {"row", "col", "observed", "expected", "residual", "direction"}
+    with pytest.raises(ValueError):
+        agent.anomalies(fw, rows=["dst_port"], cols=[], agg="count")
+
+
+def test_mcp_anomalies_and_distributions_tools(mcp_server_module, tmp_path, fw):
+    import asyncio
+
+    path = tmp_path / "fw.csv"
+    fw.to_csv(path, index=False)
+
+    async def run():
+        r1 = await mcp_server_module.server.call_tool(
+            "anomalies", {"source": str(path), "n": 3, "rows": ["dst_port"], "cols": ["action"]}
+        )
+        r2 = await mcp_server_module.server.call_tool("describe", {"source": str(path), "distributions": True})
+        return r1, r2
+
+    r1, r2 = asyncio.run(run())
+    d1 = json.loads(r1.content[0].text)
+    assert len(d1["cells"]) == 3
+    d2 = json.loads(r2.content[0].text)
+    bytes_col = next(c for c in d2["columns"] if c["name"] == "bytes")
+    assert bytes_col["distribution"]["family"] in p2h.DIST_FAMILIES
