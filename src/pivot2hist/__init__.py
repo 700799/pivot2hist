@@ -29,6 +29,7 @@ from ._cluster import COMETHODS, METHODS, cluster_frame, cluster_rows, cocluster
 from ._density import DistFit, fit_distribution, rank_distributions
 from ._density import FAMILIES as DIST_FAMILIES
 from ._mixture import GMMFit, choose_gmm_k, fit_gmm, mixture_cutpoints
+from ._hmm import HMMFit, choose_hmm_states, decode_regimes, fit_hmm
 from ._fit import AGGS, DEFAULT_WEIGHTS, Dim, DimSpec, FitOptions, Layout, build_table, fit_layout, suggest_layouts
 from ._io import load
 from ._log import log, stats, verbose
@@ -38,7 +39,7 @@ from ._semantic import HIERARCHY, infer_semantic
 from ._survey import Machine, PagedSource, Plan, Survey, downcast, load_planned, survey
 from ._view import HIST, PIVOT, Derived, Filter, View
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 _PLANNED_KEYS = ("memory_budget_mb", "mode", "columns", "query", "table", "sample_rows", "page_rows")
 
@@ -209,8 +210,40 @@ def chains(
     return v.style(heat="row" if normalize else "table")
 
 
+def regimes(
+    data: Any,
+    state: str,
+    *,
+    by: Optional[Union[str, Sequence[str]]] = None,
+    time: Optional[str] = None,
+    n_states: Optional[int] = None,
+    k_max: int = 4,
+    seed: int = 0,
+    **opts: Any,
+) -> View:
+    """Hidden Markov regimes over ``state`` as a :class:`View` (rows = regime, columns =
+    ``state``), so you can see what each regime looks like and ``toggle()`` to a
+    histogram of it.
+
+    A Baum-Welch fit (no hmmlearn/scipy, see :mod:`pivot2hist._hmm`) decodes each row
+    into one of a small number of hidden regimes from the sequence of ``state`` values,
+    e.g. a user's logins drifting from a "normal" regime into a "credential-stuffing"
+    regime. ``by`` keeps sequences inside an entity (user, source IP); ``time`` orders
+    them; ``n_states`` fixes the regime count (default: chosen by BIC, up to ``k_max``).
+    Regimes are numbered by how common they are (``"regime 1"`` = most common).
+    """
+    df = load(data)
+    regime = decode_regimes(df, state, by=by, time=time, n_states=n_states, k_max=k_max, seed=seed)
+    out = df.copy()
+    out["regime"] = regime.values
+    max_cols = opts.pop("max_cols", 12)
+    cols = [{"column": state, "top": max_cols - 1}] if df[state].nunique() > max_cols else [state]
+    v = View.fit(out, rows=["regime"], cols=cols, values=None, agg="count", max_cols=max_cols, **opts)
+    return v.style(heat="row")
+
+
 __all__ = [
-    "fit", "pivot", "histogram", "profile", "load", "suggest", "explore", "cluster", "chains",
+    "fit", "pivot", "histogram", "profile", "load", "suggest", "explore", "cluster", "chains", "regimes",
     "survey", "load_planned", "downcast", "stats", "verbose", "log", "distribution",
     "sequences", "transitions", "transition_matrix", "steady_state",
     "View", "Layout", "Dim", "FitOptions", "Filter", "Derived", "Profile", "ColumnProfile",
@@ -219,5 +252,6 @@ __all__ = [
     "cluster_frame", "cluster_rows", "cocluster", "kmeans", "dbscan", "METHODS", "COMETHODS",
     "infer_semantic", "HIERARCHY", "DEFAULT_WEIGHTS", "fit_distribution", "rank_distributions", "DIST_FAMILIES",
     "modes", "GMMFit", "fit_gmm", "choose_gmm_k", "mixture_cutpoints",
+    "HMMFit", "fit_hmm", "choose_hmm_states", "decode_regimes",
     "RULES", "AGGS", "PIVOT", "HIST", "sample", "agent", "__version__",
 ]
