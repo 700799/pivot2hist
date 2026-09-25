@@ -30,6 +30,7 @@ from ._density import DistFit, fit_distribution, rank_distributions
 from ._density import FAMILIES as DIST_FAMILIES
 from ._mixture import GMMFit, choose_gmm_k, fit_gmm, mixture_cutpoints
 from ._hmm import HMMFit, choose_hmm_states, decode_regimes, fit_hmm
+from ._deps import dependency_pairs, mutual_info_matrix
 from ._fit import AGGS, DEFAULT_WEIGHTS, Dim, DimSpec, FitOptions, Layout, build_table, fit_layout, suggest_layouts
 from ._io import load
 from ._log import log, stats, verbose
@@ -39,7 +40,7 @@ from ._semantic import HIERARCHY, infer_semantic
 from ._survey import Machine, PagedSource, Plan, Survey, downcast, load_planned, survey
 from ._view import HIST, PIVOT, Derived, Filter, View
 
-__version__ = "0.6.0"
+__version__ = "0.7.0"
 
 _PLANNED_KEYS = ("memory_budget_mb", "mode", "columns", "query", "table", "sample_rows", "page_rows")
 
@@ -242,8 +243,26 @@ def regimes(
     return v.style(heat="row")
 
 
+def dependencies(data: Any, columns: Optional[Sequence[str]] = None, *, bins: int = 10, max_cols: int = 30, **opts: Any) -> View:
+    """Which columns of ``data`` move together, as a square :class:`View` (rows = cols =
+    column names, cells = normalized mutual information, 0..1).
+
+    No correlation-matrix assumption of linearity or numeric-only columns: every column
+    is discretized (numeric/datetime into quantile bins, categorical/boolean by top-N)
+    and scored by bias-corrected mutual information, so a categorical/numeric pair (e.g.
+    ``protocol`` and ``dst_port``) shows up just as well as two numeric ones. ``.toggle()``
+    turns it into a histogram of each column's total association with everything else.
+    See :func:`pivot2hist.mutual_info_matrix` for the plain matrix.
+    """
+    df = load(data)
+    long = dependency_pairs(df, columns, bins=bins, max_cols=max_cols)
+    v = View.fit(long, rows=["column_a"], cols=["column_b"], values="association", agg="max",
+                 max_rows=max_cols, max_cols=max_cols, **opts)
+    return v.style(heat="table")
+
+
 __all__ = [
-    "fit", "pivot", "histogram", "profile", "load", "suggest", "explore", "cluster", "chains", "regimes",
+    "fit", "pivot", "histogram", "profile", "load", "suggest", "explore", "cluster", "chains", "regimes", "dependencies",
     "survey", "load_planned", "downcast", "stats", "verbose", "log", "distribution",
     "sequences", "transitions", "transition_matrix", "steady_state",
     "View", "Layout", "Dim", "FitOptions", "Filter", "Derived", "Profile", "ColumnProfile",
@@ -253,5 +272,6 @@ __all__ = [
     "infer_semantic", "HIERARCHY", "DEFAULT_WEIGHTS", "fit_distribution", "rank_distributions", "DIST_FAMILIES",
     "modes", "GMMFit", "fit_gmm", "choose_gmm_k", "mixture_cutpoints",
     "HMMFit", "fit_hmm", "choose_hmm_states", "decode_regimes",
+    "mutual_info_matrix", "dependency_pairs",
     "RULES", "AGGS", "PIVOT", "HIST", "sample", "agent", "__version__",
 ]
