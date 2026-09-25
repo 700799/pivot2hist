@@ -78,6 +78,27 @@ def _scale(values: np.ndarray, mode: str) -> np.ndarray:
     return out
 
 
+_GROUP_AGG = {"sum": "sum", "count": "sum", "nunique": "sum", "min": "min", "max": "max", "mean": "mean", "median": "median", "std": None}
+
+
+def _group_reduce(block: pd.DataFrame, agg: str) -> Optional[np.ndarray]:
+    """Subtotal of a group's rows under the table's aggregation (None when it has no meaning)."""
+    how = _GROUP_AGG.get(agg, "sum")
+    if how is None:
+        return None
+    vals = block.to_numpy(dtype=float)
+    with np.errstate(all="ignore"):
+        if how == "sum":
+            return np.nansum(np.where(np.isfinite(vals), vals, 0.0), axis=0)
+        if how == "min":
+            return np.nanmin(vals, axis=0)
+        if how == "max":
+            return np.nanmax(vals, axis=0)
+        if how == "median":
+            return np.nanmedian(vals, axis=0)
+        return np.nanmean(vals, axis=0)
+
+
 def pivot_html(
     table: pd.DataFrame,
     *,
@@ -87,10 +108,21 @@ def pivot_html(
     totals: bool = False,
     compact: bool = False,
     max_rows: Optional[int] = None,
+    subtotals: bool = False,
+    outline: bool = False,
+    agg: str = "sum",
 ) -> str:
-    """Pivot table as an HTML heatmap. Cells carry the exact value as a tooltip."""
+    """Pivot table as an HTML heatmap. Cells carry the exact value as a tooltip.
+
+    With nested rows, ``subtotals`` adds a subtotal row after every outer group (using the
+    table's ``agg``: sums add up, min/max/mean roll up accordingly) and ``outline`` draws
+    each group as a collapsible block whose header carries the subtotal, so rows within
+    rows can be folded and unfolded in the notebook without any JavaScript.
+    """
     if table.empty:
         return _wrap(title, "<div style='color:#888;padding:8px'>(empty)</div>")
+    if outline and table.index.nlevels > 1:
+        return _wrap(title, _outline_html(table, heat=heat, compact=compact, agg=agg, totals=totals))
     t = table
     if max_rows is not None and len(t) > max_rows:
         t = t.head(max_rows)
@@ -139,7 +171,25 @@ def pivot_html(
     row_sum = np.nansum(np.where(np.isfinite(values), values, 0.0), axis=1) if totals else None
     prev: Tuple[str, ...] = ()
     vmax_bar = np.nanmax(np.abs(values)) if bars and np.isfinite(values).any() else 0.0
+    sub_style = f"text-align:right;padding:3px 8px;{MONO};font-weight:600;background:#eef2f7;border-top:1px solid #d9e1ea"
+
+    def subtotal_row(start: int, stop: int) -> str:
+        block = _group_reduce(t.iloc[start:stop], agg)
+        if block is None:
+            return ""
+        label = " / ".join(row_labels[start][:-1])
+        cells = "".join(f"<td style='{sub_style}'>{_esc(fmt_cell(float(v), compact=compact))}</td>" for v in block)
+        extra = f"<td style='{sub_style}'>{_esc(fmt_cell(float(np.nansum(block)), compact=compact))}</td>" if totals else ""
+        return (
+            f"<tr><td colspan='{n_row_levels}' style='padding:3px 8px;font-weight:600;background:#eef2f7;border-top:1px solid #d9e1ea;color:#334'>"
+            f"{_esc(label)} \u2211</td>{cells}{extra}</tr>"
+        )
+
+    group_start = 0
     for i, labels in enumerate(row_labels):
+        if subtotals and n_row_levels > 1 and i > 0 and labels[:-1] != row_labels[i - 1][:-1]:
+            out.append(subtotal_row(group_start, i))
+            group_start = i
         out.append("<tr>")
         for r in range(n_row_levels):
             same = prev[: r + 1] == labels[: r + 1] if prev else False
@@ -171,6 +221,8 @@ def pivot_html(
             out.append(f"<td style='text-align:right;padding:3px 8px;{MONO};font-weight:600;background:#fafafa'>{_esc(fmt_cell(row_sum[i], compact=compact))}</td>")
         out.append("</tr>")
         prev = labels
+    if subtotals and n_row_levels > 1 and len(row_labels):
+        out.append(subtotal_row(group_start, len(row_labels)))
     if totals:
         col_sum = np.nansum(np.where(np.isfinite(values), values, 0.0), axis=0)
         out.append("<tr>")
@@ -183,6 +235,66 @@ def pivot_html(
     if len(t) < len(table):
         out.append(f"<div style='color:#888;font-size:11px;padding:4px 2px'>... {len(table) - len(t):,} more rows</div>")
     return _wrap(title, "".join(out))
+
+
+def _outline_html(table: pd.DataFrame, *, heat: str, compact: bool, agg: str, totals: bool, label_w: int = 190, col_w: int = 96) -> str:
+    """Nested rows as collapsible ``<details>`` blocks with subtotals in the headers."""
+    values = table.to_numpy(dtype=float)
+    shade = _scale(values, heat) if heat != "none" else np.zeros_like(values)
+    col_labels = _labels(table.columns)
+    n_cols = len(col_labels)
+    width = label_w + col_w * (n_cols + (1 if totals else 0))
+    colgroup = f"<colgroup><col style='width:{label_w}px'/>" + "".join(f"<col style='width:{col_w}px'/>" for _ in range(n_cols + (1 if totals else 0))) + "</colgroup>"
+    tstyle = f"table-layout:fixed;width:{width}px;border-collapse:collapse;{FONT};font-size:12px"
+
+    def cell(v: float, sh: float, *, bold: bool = False) -> str:
+        bg = heat_color(sh, negative=(v < 0)) if heat != "none" and np.isfinite(v) else "#fff"
+        fg = _text_color(sh) if heat != "none" else "#222"
+        return (
+            f"<td title='{_esc(fmt_cell(v))}' style='text-align:right;padding:3px 8px;{MONO};white-space:nowrap;overflow:hidden;"
+            f"background:{bg};color:{fg};font-weight:{600 if bold else 400};border-left:1px solid #f0f0f0'>{_esc(fmt_cell(v, compact=compact))}</td>"
+        )
+
+    def shade_of(row: np.ndarray) -> np.ndarray:
+        s = _scale(row.reshape(1, -1), "table" if heat != "none" else "none")[0] if heat != "none" else np.zeros(len(row))
+        return s
+
+    def block(sub: pd.DataFrame, sub_shade: np.ndarray, depth: int) -> str:
+        parts: List[str] = []
+        if sub.index.nlevels == 1:
+            rows = []
+            for i, lab in enumerate(sub.index):
+                cells = "".join(cell(float(sub.iat[i, j]), float(sub_shade[i, j])) for j in range(n_cols))
+                extra = cell(float(np.nansum(np.where(np.isfinite(sub.iloc[i].to_numpy(dtype=float)), sub.iloc[i].to_numpy(dtype=float), 0.0))), 0.0, bold=True) if totals else ""
+                rows.append(f"<tr><td style='padding:3px 8px 3px {8 + 14 * depth}px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis'>{_esc(str(lab))}</td>{cells}{extra}</tr>")
+            return f"<table style='{tstyle}'>{colgroup}{''.join(rows)}</table>"
+        keys = sub.index.get_level_values(0)
+        seen: List[Any] = []
+        for k in keys:
+            if k not in seen:
+                seen.append(k)
+        for k in seen:
+            mask = (keys == k)
+            inner = sub[mask].droplevel(0)
+            inner_shade = sub_shade[mask]
+            tot = _group_reduce(sub[mask], agg)
+            head_cells = "".join(cell(float(v), float(sh), bold=True) for v, sh in zip(tot, shade_of(tot))) if tot is not None else "".join("<td></td>" for _ in range(n_cols))
+            extra = cell(float(np.nansum(tot)), 0.0, bold=True) if (totals and tot is not None) else ""
+            summary = (
+                f"<summary style='cursor:pointer;list-style:none;display:block'><table style='{tstyle}'>{colgroup}<tr style='background:#eef2f7'>"
+                f"<td style='padding:4px 8px 4px {8 + 14 * depth}px;font-weight:600;color:#223;white-space:nowrap;overflow:hidden;text-overflow:ellipsis'>"
+                f"<span style='display:inline-block;width:12px;color:#667'>\u25b8</span>{_esc(str(k))} <span style='color:#778;font-weight:400'>({int(mask.sum())})</span></td>{head_cells}{extra}</tr></table></summary>"
+            )
+            parts.append(f"<details open='open' style='margin:0'>{summary}<div style='border-left:2px solid #d9e1ea;margin-left:{6 + 14 * depth}px'>{block(inner, inner_shade, depth + 1)}</div></details>")
+        return "".join(parts)
+
+    head = "".join(
+        f"<th style='text-align:right;padding:4px 8px;background:#f5f6f8;color:#222;font-weight:600;white-space:nowrap;overflow:hidden'>{_esc(' / '.join(c))}</th>" for c in col_labels
+    ) + ("<th style='text-align:right;padding:4px 8px;background:#f5f6f8'>total</th>" if totals else "")
+    names = " > ".join(str(n) for n in table.index.names if n is not None)
+    header = f"<table style='{tstyle}'>{colgroup}<tr><th style='text-align:left;padding:4px 8px;background:#f5f6f8;color:#555'>{_esc(names)}</th>{head}</tr></table>"
+    css = "<style>.p2h-outline details>summary::-webkit-details-marker{display:none}.p2h-outline details:not([open])>summary span:first-child{transform:rotate(0deg)}.p2h-outline details[open]>summary span:first-child{display:inline-block;transform:rotate(90deg)}</style>"
+    return f"<div class='p2h-outline' style='border:1px solid #ddd;border-radius:6px;overflow:auto;display:inline-block;max-width:100%'>{css}{header}{block(table, shade, 0)}</div>"
 
 
 def _wrap(title: Optional[str], body: str) -> str:
