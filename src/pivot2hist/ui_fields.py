@@ -28,6 +28,14 @@ KIND_COLORS = {"categorical": "#0072B2", "numeric": "#009E73", "datetime": "#E69
 ZONES = ("rows", "cols", "values", "slicers")
 ZONE_TITLES = {"rows": "Rows", "cols": "Columns", "values": "Values", "slicers": "Slicers"}
 
+#: Named highlight colors for :func:`chip_html`'s ``mark``/the ``marks`` trait. Any CSS
+#: color string works too (``"#123abc"``, ``"tomato"``) - these are just a convenient,
+#: discoverable palette; clicking a chip's dot in the anywidget UI cycles through them.
+MARK_PALETTE: Dict[str, str] = {
+    "red": "#e5484d", "orange": "#f76b15", "yellow": "#f5c518",
+    "green": "#30a46c", "blue": "#3b82f6", "purple": "#8b5cf6",
+}
+
 
 def field_stats(profile: Profile) -> List[Dict[str, Any]]:
     """One dict per column: name, kind, semantic, count, distinct, variety, nulls, examples."""
@@ -50,6 +58,18 @@ def field_stats(profile: Profile) -> List[Dict[str, Any]]:
     return out
 
 
+def _set_mark(marks: Dict[str, str], name: str, color: Optional[str]) -> Dict[str, str]:
+    """A new ``marks`` dict with ``name`` painted ``color`` (a :data:`MARK_PALETTE` name
+    or any CSS color string), or cleared when ``color`` is ``None``/empty."""
+    out = dict(marks)
+    resolved = MARK_PALETTE.get(color, color) if color else None
+    if resolved:
+        out[name] = resolved
+    else:
+        out.pop(name, None)
+    return out
+
+
 def _fmt_n(n: float) -> str:
     if n >= 1e6:
         return f"{n / 1e6:.3g}M"
@@ -58,15 +78,23 @@ def _fmt_n(n: float) -> str:
     return f"{int(n)}"
 
 
-def chip_html(f: Dict[str, Any], *, removable: bool = False, drag: bool = True) -> str:
-    """Static HTML for one field chip (used by the fallback and by snapshots)."""
+def chip_html(f: Dict[str, Any], *, removable: bool = False, drag: bool = True, mark: Optional[str] = None) -> str:
+    """Static HTML for one field chip (used by the fallback and by snapshots).
+
+    ``mark`` is a CSS color (see :data:`MARK_PALETTE` for named ones) painted as a left
+    border and a faint background tint, so a highlighted field stays visible even in a
+    plain HTML snapshot with no interactivity.
+    """
     color = KIND_COLORS.get(f["kind"], "#888")
     kind = f["kind"] + (f" · {f['semantic']}" if f.get("semantic") else "") + (f" · {f['ts']}" if f.get("ts") else "")
     pct = max(2, min(100, int(round(f["variety"] * 100)))) if f["distinct"] > 1 else 2
     title = _html.escape(f"{f['name']}: {kind}; {f['count']:,} non-null, {f['distinct']:,} distinct (variety {f['variety']:.2%}), nulls {f['nulls']:.1%}; e.g. {f.get('examples', '')}")
+    if mark:
+        title += _html.escape(f" — marked {mark}")
     x = "<span class='p2h-x' title='remove'>×</span>" if removable else ""
+    mark_style = f"border-left:4px solid {_html.escape(mark)};box-shadow:0 0 0 1px {_html.escape(mark)} inset" if mark else ""
     return (
-        f"<div class='p2h-chip' draggable='{'true' if drag else 'false'}' data-name='{_html.escape(f['name'])}' title='{title}'>"
+        f"<div class='p2h-chip' draggable='{'true' if drag else 'false'}' data-name='{_html.escape(f['name'])}' title='{title}' style='{mark_style}'>"
         f"<span class='p2h-dot' style='background:{color}'></span>"
         f"<span class='p2h-name'>{_html.escape(f['name'])}</span>"
         f"<span class='p2h-kind'>{_html.escape(kind)}</span>"
@@ -76,14 +104,16 @@ def chip_html(f: Dict[str, Any], *, removable: bool = False, drag: bool = True) 
     )
 
 
-def zones_html(fields: List[Dict[str, Any]], zones: Dict[str, List[str]], *, interactive: bool = True, theme: str = "light") -> str:
+def zones_html(fields: List[Dict[str, Any]], zones: Dict[str, List[str]], *, interactive: bool = True,
+                theme: str = "light", marks: Optional[Dict[str, str]] = None) -> str:
     """Static HTML for the pane: the pool of unused fields plus the four zones."""
+    marks = marks or {}
     by = {f["name"]: f for f in fields}
     used = {n for z in zones.values() for n in z}
-    pool = "".join(chip_html(f, drag=interactive) for f in fields if f["name"] not in used)
+    pool = "".join(chip_html(f, drag=interactive, mark=marks.get(f["name"])) for f in fields if f["name"] not in used)
     zone_blocks = []
     for z in ZONES:
-        chips = "".join(chip_html(by[n], removable=interactive, drag=interactive) for n in zones.get(z, []) if n in by)
+        chips = "".join(chip_html(by[n], removable=interactive, drag=interactive, mark=marks.get(n)) for n in zones.get(z, []) if n in by)
         hint = {"rows": "drag fields here: rows within rows", "cols": "columns within columns", "values": "measure (count when empty)", "slicers": "filter fields"}[z]
         body = chips if chips else f"<span class='p2h-hint'>{hint}</span>"
         zone_blocks.append(
@@ -164,19 +194,30 @@ function render({ model, el }) {
   const TITLES = { rows: "Rows", cols: "Columns", values: "Values", slicers: "Slicers" };
   const HINTS = { rows: "drag fields here: rows within rows", cols: "columns within columns", values: "measure (count when empty)", slicers: "filter fields" };
   const COLORS = { categorical: "#0072B2", numeric: "#009E73", datetime: "#E69F00", boolean: "#CC79A7", id: "#999999", constant: "#bbbbbb" };
+  const MARK_CYCLE = [null, "#e5484d", "#f76b15", "#f5c518", "#30a46c", "#3b82f6", "#8b5cf6"];
   let search = "";
   const fmt = (n) => (n >= 1e6 ? (n / 1e6).toPrecision(3) + "M" : n >= 1e3 ? (n / 1e3).toPrecision(3) + "K" : String(n));
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
+  function cycleMark(name) {
+    const marks = { ...(model.get("marks") || {}) };
+    const cur = marks[name] || null;
+    const next = MARK_CYCLE[(MARK_CYCLE.indexOf(cur) + 1) % MARK_CYCLE.length];
+    if (next) marks[name] = next; else delete marks[name];
+    model.set("marks", marks); model.save_changes(); draw();
+  }
   function chip(f, removable) {
     const d = document.createElement("div");
     d.className = "p2h-chip"; d.draggable = true; d.dataset.name = f.name;
     const kind = f.kind + (f.semantic ? " · " + f.semantic : "") + (f.ts ? " · " + f.ts : "");
     const pct = f.distinct > 1 ? Math.max(2, Math.min(100, Math.round(f.variety * 100))) : 2;
-    d.title = `${f.name}: ${kind}; ${f.count.toLocaleString()} non-null, ${f.distinct.toLocaleString()} distinct (variety ${(f.variety * 100).toFixed(2)}%), nulls ${(f.nulls * 100).toFixed(1)}%; e.g. ${f.examples || ""}`;
-    d.innerHTML = `<span class='p2h-dot' style='background:${COLORS[f.kind] || "#888"}'></span><span class='p2h-name'>${esc(f.name)}</span><span class='p2h-kind'>${esc(kind)}</span><span class='p2h-stat'>n ${fmt(f.count)}</span><span class='p2h-stat'>≠ ${fmt(f.distinct)}</span><span class='p2h-var'><span style='width:${pct}%'></span></span>${removable ? "<span class='p2h-x' title='remove'>×</span>" : ""}`;
+    const mark = (model.get("marks") || {})[f.name];
+    if (mark) { d.style.borderLeft = `4px solid ${mark}`; d.style.boxShadow = `0 0 0 1px ${mark} inset`; }
+    d.title = `${f.name}: ${kind}; ${f.count.toLocaleString()} non-null, ${f.distinct.toLocaleString()} distinct (variety ${(f.variety * 100).toFixed(2)}%), nulls ${(f.nulls * 100).toFixed(1)}%; e.g. ${f.examples || ""}` + (mark ? ` — marked (click the dot to cycle/clear)` : ` — click the dot to highlight`);
+    d.innerHTML = `<span class='p2h-dot' style='background:${COLORS[f.kind] || "#888"};cursor:pointer' title='click to highlight'></span><span class='p2h-name'>${esc(f.name)}</span><span class='p2h-kind'>${esc(kind)}</span><span class='p2h-stat'>n ${fmt(f.count)}</span><span class='p2h-stat'>≠ ${fmt(f.distinct)}</span><span class='p2h-var'><span style='width:${pct}%'></span></span>${removable ? "<span class='p2h-x' title='remove'>×</span>" : ""}`;
     d.addEventListener("dragstart", (e) => { e.dataTransfer.setData("text/plain", f.name); e.dataTransfer.effectAllowed = "move"; d.classList.add("p2h-dragging"); });
     d.addEventListener("dragend", () => d.classList.remove("p2h-dragging"));
+    d.querySelector(".p2h-dot").addEventListener("click", (e) => { e.stopPropagation(); cycleMark(f.name); });
     if (removable) d.querySelector(".p2h-x").addEventListener("click", () => { removeEverywhere(f.name); commit(); });
     return d;
   }
@@ -228,7 +269,7 @@ function render({ model, el }) {
     }
     root.appendChild(zones); el.appendChild(root);
   }
-  for (const k of ["fields", ...ZONES, "theme"]) model.on(`change:${k}`, draw);
+  for (const k of ["fields", ...ZONES, "theme", "marks"]) model.on(`change:${k}`, draw);
   draw();
 }
 export default { render };
@@ -257,6 +298,7 @@ try:
         values = T.List(T.Unicode()).tag(sync=True)
         slicers = T.List(T.Unicode()).tag(sync=True)
         theme = T.Unicode("light").tag(sync=True)
+        marks = T.Dict().tag(sync=True)  # column name -> CSS color; clicking a chip's dot also cycles this
 
         def set_zones(self, **zones: Sequence[str]) -> None:
             """Set several zones at once without firing a change per zone."""
@@ -264,8 +306,17 @@ try:
                 for k, v in zones.items():
                     setattr(self, k, list(v))
 
+        def paint(self, name: str, color: Optional[str]) -> None:
+            """Highlight field ``name`` with ``color`` (a name from :data:`MARK_PALETTE`
+            or any CSS color); ``color=None`` clears its mark. No-op for an unknown field."""
+            self.marks = _set_mark(self.marks, name, color)
+
+        def unmark(self, name: Optional[str] = None) -> None:
+            """Clear one field's mark, or every mark when ``name`` is ``None``."""
+            self.marks = {} if name is None else {k: v for k, v in self.marks.items() if k != name}
+
         def snapshot_html(self) -> str:
-            return zones_html(self.fields, {z: list(getattr(self, z)) for z in ZONES}, theme=self.theme)
+            return zones_html(self.fields, {z: list(getattr(self, z)) for z in ZONES}, theme=self.theme, marks=self.marks)
 
     HAS_ANYWIDGET = True
 except ImportError:  # pragma: no cover - exercised only without anywidget
@@ -285,6 +336,7 @@ class FieldListFallback(W.VBox):
     cols = T.List(T.Unicode())
     values = T.List(T.Unicode())
     slicers = T.List(T.Unicode())
+    marks = T.Dict()
 
     def __init__(self, fields: List[Dict[str, Any]], *, theme: str = "light", **zones: Sequence[str]):
         super().__init__()
@@ -305,8 +357,17 @@ class FieldListFallback(W.VBox):
         with self.hold_trait_notifications():
             for z, v in zones.items():
                 setattr(self, z, list(v))
-        self.observe(lambda _: self._redraw(), names=list(ZONES))
+        self.observe(lambda _: self._redraw(), names=list(ZONES) + ["marks"])
         self._redraw()
+
+    def paint(self, name: str, color: Optional[str]) -> None:
+        """Highlight field ``name`` with ``color`` (a name from :data:`MARK_PALETTE`
+        or any CSS color); ``color=None`` clears its mark. No-op for an unknown field."""
+        self.marks = _set_mark(self.marks, name, color)
+
+    def unmark(self, name: Optional[str] = None) -> None:
+        """Clear one field's mark, or every mark when ``name`` is ``None``."""
+        self.marks = {} if name is None else {k: v for k, v in self.marks.items() if k != name}
 
     @staticmethod
     def _label(f: Dict[str, Any]) -> str:
@@ -345,6 +406,7 @@ class FieldListFallback(W.VBox):
         setattr(self, zone, arr)
 
     def _redraw(self) -> None:
+        mark_opts = [("mark…", "__unset__"), ("—", None)] + [(c, c) for c in MARK_PALETTE]
         for z in ZONES:
             rows = []
             for name in getattr(self, z):
@@ -354,11 +416,13 @@ class FieldListFallback(W.VBox):
                 up = W.Button(icon="arrow-up", layout=W.Layout(width="30px"))
                 down = W.Button(icon="arrow-down", layout=W.Layout(width="30px"))
                 rm = W.Button(icon="times", layout=W.Layout(width="30px"))
+                mark = W.Dropdown(options=mark_opts, value="__unset__", layout=W.Layout(width="80px"))
                 up.on_click(lambda _, z=z, n=name: self._shift(z, n, -1))
                 down.on_click(lambda _, z=z, n=name: self._shift(z, n, +1))
                 rm.on_click(lambda _, n=name: self.move(n, None))
-                preview = theme_style_block(self.theme, selector=".p2h-fb-chip") + f"<style>{FIELDS_CSS}</style><div class='p2h-fb-chip'>{chip_html(f, drag=False)}</div>"
-                rows.append(W.HBox([W.HTML(preview), up, down, rm]))
+                mark.observe(lambda ch, n=name: self.paint(n, ch["new"]) if ch["new"] != "__unset__" else None, names="value")
+                preview = theme_style_block(self.theme, selector=".p2h-fb-chip") + f"<style>{FIELDS_CSS}</style><div class='p2h-fb-chip'>{chip_html(f, drag=False, mark=self.marks.get(name))}</div>"
+                rows.append(W.HBox([W.HTML(preview), mark, up, down, rm]))
             self._boxes[z].children = rows or [W.HTML("<span style='color:#99a;font-style:italic'>empty</span>")]
 
     def set_zones(self, **zones: Sequence[str]) -> None:
@@ -367,20 +431,27 @@ class FieldListFallback(W.VBox):
                 setattr(self, k, list(v))
 
     def snapshot_html(self) -> str:
-        return zones_html(self.fields, {z: list(getattr(self, z)) for z in ZONES}, interactive=False, theme=self.theme)
+        return zones_html(self.fields, {z: list(getattr(self, z)) for z in ZONES}, interactive=False, theme=self.theme, marks=self.marks)
 
 
-def make_field_list(profile: Profile, *, prefer_anywidget: bool = True, theme: str = "light", **zones: Sequence[str]):
-    """The best available fields pane for ``profile``."""
+def make_field_list(profile: Profile, *, prefer_anywidget: bool = True, theme: str = "light",
+                     marks: Optional[Dict[str, str]] = None, **zones: Sequence[str]):
+    """The best available fields pane for ``profile``. ``marks``: column name -> CSS
+    color (or a :data:`MARK_PALETTE` name), for fields already highlighted."""
     fields = field_stats(profile)
     if prefer_anywidget and HAS_ANYWIDGET and FieldList is not None:
         w = FieldList(fields=fields, theme=theme)
         w.set_zones(**zones)
+        if marks:
+            w.marks = {k: MARK_PALETTE.get(v, v) for k, v in marks.items()}
         return w
-    return FieldListFallback(fields, theme=theme, **zones)
+    w = FieldListFallback(fields, theme=theme, **zones)
+    if marks:
+        w.marks = {k: MARK_PALETTE.get(v, v) for k, v in marks.items()}
+    return w
 
 
 __all__ = [
     "FieldList", "FieldListFallback", "make_field_list", "field_stats", "chip_html", "zones_html",
-    "theme_style_block", "FIELDS_CSS", "FIELD_THEMES", "ZONES", "HAS_ANYWIDGET",
+    "theme_style_block", "FIELDS_CSS", "FIELD_THEMES", "ZONES", "HAS_ANYWIDGET", "MARK_PALETTE",
 ]

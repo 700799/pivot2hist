@@ -257,3 +257,119 @@ def test_fields_tab_survives_reset(ex, fw):
     ex.w_fields.rows = ["country", "protocol"]
     ex.w_reset.click()
     assert list(ex.w_fields.rows) == first_rows
+
+
+def test_paint_and_unmark(ex):
+    ex.paint("src_ip", "red")
+    assert ex.marks["src_ip"].startswith("#")
+    assert ex.w_fields.marks == ex.marks
+    with pytest.raises(KeyError):
+        ex.paint("not_a_real_column", "blue")
+    ex.unmark("src_ip")
+    assert "src_ip" not in ex.marks
+    ex.paint("action", "green")
+    ex.unmark()
+    assert ex.marks == {}
+
+
+def test_undo_reverts_marks_too(ex):
+    ex.paint("src_ip", "red")  # not through _act(): no undo entry from this alone
+    ex.w_rows.value = ("action",)  # a real _act()-driven change: snapshots the marked state
+    ex.paint("src_ip", None)
+    ex.w_cols.value = ("protocol",)  # another _act(): snapshots the now-unmarked state
+    ex.w_undo.click()
+    assert ex.marks.get("src_ip") is None  # undo restores the snapshot from just before this click
+    ex.w_undo.click()
+    assert "src_ip" in ex.marks  # further back: the mark from before the first _act()
+
+
+def test_clone_shares_source_and_profile_but_is_independent(ex, fw):
+    ex.paint("src_ip", "blue")
+    clone = ex.clone()
+    try:
+        assert clone is not ex
+        assert clone._source is ex._source
+        assert clone._profile is ex._profile
+        assert clone.marks == ex.marks  # marks carry over
+        assert clone.checkpoints == [] and clone.history == []  # fresh timeline
+        clone.w_rows.value = ("dst_port",)
+        assert ex.w_rows.value != ("dst_port",) or list(ex.spec.get("rows") or []) != ["dst_port"]
+    finally:
+        clone.close()
+
+
+def test_clone_with_explicit_view(ex, fw):
+    other = p2h.fit(fw, rows=["protocol"], cols=["action"])
+    clone = ex.clone(view=other)
+    try:
+        assert clone.spec.get("rows") == ["protocol"]
+    finally:
+        clone.close()
+
+
+def test_timeline_starts_empty(ex):
+    assert ex.checkpoints == []
+    assert ex.w_timeline_slider.max == 0
+    assert "no checkpoints" in ex.w_timeline_note.value
+
+
+def test_save_checkpoint_and_goto(ex):
+    ex.w_rows.value = ("src_ip",)
+    ex.save_checkpoint("baseline")
+    assert len(ex.checkpoints) == 1
+    assert ex.checkpoints[0]["note"] == "baseline"
+    assert ex.w_timeline_slider.max == 0
+    assert ex.w_checkpoint_note.value == ""  # cleared after saving
+
+    ex.w_rows.value = ("dst_port",)
+    ex.paint("dst_port", "red")
+    ex.save_checkpoint("  port spike  ")
+    assert len(ex.checkpoints) == 2
+    assert ex.checkpoints[1]["note"] == "port spike"  # stripped
+    assert ex.w_timeline_slider.max == 1
+    assert ex.w_timeline_slider.value == 1  # jumps to the newest on save
+
+    ex.goto_checkpoint(0)
+    assert ex.w_rows.value == ("src_ip",) and ex.marks == {}
+    ex.goto_checkpoint(-1)
+    assert ex.w_rows.value == ("dst_port",) and "dst_port" in ex.marks
+
+
+def test_timeline_slider_rerenders_on_each_notch(ex):
+    ex.w_rows.value = ("src_ip",)
+    ex.save_checkpoint("a")
+    out_a = ex.w_out.value
+    ex.w_rows.value = ("action",)
+    ex.save_checkpoint("b")
+    out_b = ex.w_out.value
+    assert out_a != out_b
+
+    ex.w_timeline_slider.value = 0
+    assert ex.view.layout.rows[0].column == "src_ip"
+    assert ex.w_out.value == out_a
+    ex.w_timeline_slider.value = 1
+    assert ex.view.layout.rows[0].column == "action"
+    assert ex.w_out.value == out_b
+
+
+def test_goto_checkpoint_out_of_range_and_empty(ex):
+    with pytest.raises(IndexError):
+        ex.goto_checkpoint(0)  # nothing saved yet
+    ex.save_checkpoint("only one")
+    with pytest.raises(IndexError):
+        ex.goto_checkpoint(5)
+
+
+def test_delete_checkpoint(ex):
+    ex.save_checkpoint("one")
+    ex.save_checkpoint("two")
+    n = len(ex.checkpoints)
+    ex.w_timeline_slider.value = n - 1
+    ex._delete_checkpoint()
+    assert len(ex.checkpoints) == n - 1
+
+
+def test_checkpoint_playback_widget_linked(ex):
+    ex.save_checkpoint("one")
+    ex.save_checkpoint("two")
+    assert ex.w_timeline_play.max == ex.w_timeline_slider.max == 1

@@ -13,6 +13,7 @@ always show the equivalent Python.
 """
 from __future__ import annotations
 
+import datetime as _dt
 import html as _html
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -29,9 +30,9 @@ from ._chains import sequences as _sequences
 from ._cluster import COMETHODS, METHODS
 from ._fit import AGGS, COUNT, FitOptions, Layout
 from ._log import log
-from ._profile import BOOLEAN, CATEGORICAL, DATETIME, NUMERIC, profile
+from ._profile import BOOLEAN, CATEGORICAL, DATETIME, NUMERIC, Profile, profile
 from ._view import HIST, PIVOT, View
-from .ui_fields import make_field_list
+from .ui_fields import _set_mark, make_field_list
 
 CHAINS = "chains"
 
@@ -46,9 +47,10 @@ class Explorer:
     """The widget app. ``explorer.view`` is the current :class:`View`; ``explorer.code()``
     is the Python that reproduces it."""
 
-    def __init__(self, view: View, *, width: int = 760, height: int = 340, max_slicers: int = 8):
+    def __init__(self, view: View, *, width: int = 760, height: int = 340, max_slicers: int = 8,
+                 marks: Optional[Dict[str, str]] = None, _profile: Optional[Profile] = None):
         self._source = view.source
-        self._profile = profile(self._source)
+        self._profile = _profile if _profile is not None else profile(self._source)
         self.options: FitOptions = view.options
         self.spec: Dict[str, Any] = {k: view._spec.get(k) for k in ("rows", "cols", "values", "agg")}
         self.slices: List[Tuple[str, Any]] = []  # ("slice", {col: spec}) | ("query", expr) | ("top", (col, n))
@@ -59,8 +61,10 @@ class Explorer:
         self.chain: Dict[str, Any] = {"state": None, "by": None, "time": None, "normalize": False}
         self.display: Dict[str, Any] = {**view.display, "width": width, "height": height}
         self.field_slicers: List[str] = []
+        self.marks: Dict[str, str] = dict(marks) if marks else {}
         self.refit_sliced = False
         self.history: List[Dict[str, Any]] = []
+        self.checkpoints: List[Dict[str, Any]] = []
         self.view: View = view
         self._root_view = view  # keeps a paged source alive across rebuilds
         self._syncing = False
@@ -76,6 +80,164 @@ class Explorer:
     def close(self) -> None:
         """Stop listening to the step log."""
         self._unlisten()
+
+    def clone(self, view: Optional[View] = None) -> "Explorer":
+        """A second, independent explorer over the same data, for a new notebook cell.
+
+        Re-profiling a wide or large frame is real work, and ``Explorer.__init__``
+        normally does it every time; ``clone()`` skips it - the new explorer shares this
+        one's already-computed :class:`~pivot2hist.Profile` and underlying source frame
+        (no copy) - and carries over the field highlights (:meth:`paint`) since those are
+        about the columns, not this cell's particular layout. Everything else (the
+        layout/slices/style recipe, undo history, checkpoints) starts fresh, so the two
+        cells can't step on each other::
+
+            explorer = p2h.explore(df)                 # cell 1: explore freely
+            cell2 = explorer.clone()                    # cell 2: same data, no re-profiling
+            cell2.w_rows.value = ("dst_port",)           # diverges independently
+
+        Pass ``view`` to start the clone from a different layout instead of this one's.
+        """
+        return Explorer(
+            view if view is not None else self.view, width=int(self.display.get("width", 760)),
+            height=int(self.display.get("height", 340)), max_slicers=self._max_slicers,
+            marks=dict(self.marks), _profile=self._profile,
+        )
+
+    def paint(self, name: str, color: Optional[str] = None) -> None:
+        """Highlight field ``name`` in the Fields tab with ``color`` (a name from
+        :data:`pivot2hist.ui_fields.MARK_PALETTE` - ``"red"``, ``"orange"``, ``"yellow"``,
+        ``"green"``, ``"blue"``, ``"purple"`` - or any CSS color string); ``color=None``
+        clears it. Marks are cosmetic bookkeeping only (they never affect the fitted
+        layout or the data) and are carried along by :meth:`clone` and saved checkpoints.
+        """
+        if name not in self._profile:
+            raise KeyError(f"unknown column {name!r}")
+        self.marks = _set_mark(self.marks, name, color)
+        self.w_fields.marks = dict(self.marks)
+
+    def unmark(self, name: Optional[str] = None) -> None:
+        """Clear one field's highlight (:meth:`paint`), or every one when ``name`` is
+        ``None``."""
+        self.marks = {} if name is None else {k: v for k, v in self.marks.items() if k != name}
+        self.w_fields.marks = dict(self.marks)
+
+    # ------------------------------------------------------------------ timeline / checkpoints
+
+    def save_checkpoint(self, note: str = "") -> None:
+        """Bookmark the current recipe (layout, slices, style, cluster/chain settings,
+        field marks — everything the undo history tracks) as a labeled point on the
+        Timeline tab, with an optional ``note`` describing what it shows.
+
+        Move the Timeline tab's slider (or click its Play button to step through every
+        checkpoint automatically) to jump back to any of them — the view is rebuilt
+        exactly as it was at that point every time, like undo but to a *named*,
+        permanent point rather than just the last change. Checkpoints are cheap: like
+        everything else here they hold the recipe, not a copy of the data.
+
+        ::
+
+            explorer = p2h.explore(df)
+            # ... adjust rows/cols/slices/style until it looks right ...
+            explorer.save_checkpoint("clean baseline, all traffic")
+            # ... slice down to a suspicious host, try a few things ...
+            explorer.save_checkpoint("host 10.0.4.12 spike investigation")
+            explorer.goto_checkpoint(0)   # back to the baseline, or drag the slider
+        """
+        entry = {
+            "snapshot": self._snapshot(),
+            "note": str(note).strip(),
+            "label": self.view.describe(),
+            "time": _dt.datetime.now().strftime("%H:%M:%S"),
+        }
+        self.checkpoints.append(entry)
+        self._syncing = True
+        try:
+            self.w_checkpoint_note.value = ""
+        finally:
+            self._syncing = False
+        self._refresh_timeline(select=len(self.checkpoints) - 1)
+
+    def goto_checkpoint(self, idx: int) -> None:
+        """Jump to checkpoint ``idx`` (0-based, oldest first; negative indexes from the
+        end like a list) and re-render the view as it was then — the same thing moving
+        the Timeline tab's slider does."""
+        if not self.checkpoints:
+            raise IndexError("no checkpoints saved yet")
+        n = len(self.checkpoints)
+        idx = idx + n if idx < 0 else idx
+        if not 0 <= idx < n:
+            raise IndexError(f"checkpoint index {idx} out of range for {n} checkpoint(s)")
+        self._syncing = True
+        try:
+            self.w_timeline_slider.value = idx
+            self.w_timeline_play.value = idx
+        finally:
+            self._syncing = False
+        self._apply_checkpoint(idx)
+
+    def _delete_checkpoint(self) -> None:
+        if not self.checkpoints:
+            return
+        idx = max(0, min(self.w_timeline_slider.value, len(self.checkpoints) - 1))
+        del self.checkpoints[idx]
+        self._refresh_timeline()
+
+    def _on_timeline(self, change: Any) -> None:
+        if self._syncing or not self.checkpoints:
+            return
+        idx = max(0, min(int(self.w_timeline_slider.value), len(self.checkpoints) - 1))
+        self._apply_checkpoint(idx)
+
+    def _apply_checkpoint(self, idx: int) -> None:
+        try:
+            self._restore(self.checkpoints[idx]["snapshot"])
+            self._rebuild()
+        except Exception as e:  # noqa: BLE001 - surface any failure in the status line
+            self.w_status.value = f"<span style='color:#b00020'>{_html.escape(type(e).__name__)}: {_html.escape(str(e))}</span>"
+        self._refresh_timeline_label(idx)
+
+    def _refresh_timeline(self, select: Optional[int] = None) -> None:
+        n = len(self.checkpoints)
+        idx = select if select is not None else min(self.w_timeline_slider.value, max(0, n - 1))
+        idx = max(0, min(idx, max(0, n - 1)))
+        self._syncing = True
+        try:
+            self.w_timeline_slider.max = max(0, n - 1)
+            self.w_timeline_play.max = max(0, n - 1)
+            self.w_timeline_slider.value = idx
+            self.w_timeline_play.value = idx
+        finally:
+            self._syncing = False
+        self._refresh_timeline_label(idx)
+        rows = []
+        for i, c in enumerate(self.checkpoints):
+            note = _html.escape(c["note"]) if c["note"] else "<i style='color:#999'>(no note)</i>"
+            marker = " style='background:#eef3ff'" if n and i == idx else ""
+            rows.append(
+                f"<tr{marker}><td style='padding:2px 8px;color:#888'>{i}</td>"
+                f"<td style='padding:2px 8px'>{_html.escape(c['time'])}</td>"
+                f"<td style='padding:2px 8px'>{_html.escape(c['label'])}</td>"
+                f"<td style='padding:2px 8px'>{note}</td></tr>"
+            )
+        body = "".join(rows) if rows else (
+            "<tr><td colspan='4' style='padding:6px;color:#999'><i>no checkpoints yet — set the layout how "
+            "you want it and click Save checkpoint</i></td></tr>"
+        )
+        self.w_timeline_list.value = (
+            "<table style='font-size:11px;border-collapse:collapse;width:100%'>"
+            "<tr style='background:#f5f6f8'><th style='padding:2px 8px;text-align:left'>#</th>"
+            "<th style='padding:2px 8px;text-align:left'>time</th><th style='padding:2px 8px;text-align:left'>state</th>"
+            "<th style='padding:2px 8px;text-align:left'>note</th></tr>" + body + "</table>"
+        )
+
+    def _refresh_timeline_label(self, idx: int) -> None:
+        if not self.checkpoints:
+            self.w_timeline_note.value = "<i style='color:#999'>no checkpoints saved yet</i>"
+            return
+        c = self.checkpoints[idx]
+        note = _html.escape(c["note"]) if c["note"] else "<i style='color:#999'>(no note)</i>"
+        self.w_timeline_note.value = f"<div style='font-size:12px'><b>#{idx}</b> · {_html.escape(c['time'])} · {_html.escape(c['label'])}<br>{note}</div>"
 
     def _on_log(self, entry: Any) -> None:
         self._log_lines.append(entry.format())
@@ -217,7 +379,8 @@ class Explorer:
         init_rows = [c for c in (_col_of(x) for x in (self.spec.get("rows") or [])) if c]
         init_cols = [c for c in (_col_of(x) for x in (self.spec.get("cols") or [])) if c]
         init_values = [self.spec["values"]] if self.spec.get("values") else []
-        self.w_fields = make_field_list(prof, theme=str(self.display.get("theme", "light")), rows=init_rows, cols=init_cols, values=init_values, slicers=[])
+        self.w_fields = make_field_list(prof, theme=str(self.display.get("theme", "light")), rows=init_rows, cols=init_cols,
+                                        values=init_values, slicers=list(self.field_slicers), marks=dict(self.marks))
         self.w_fields.observe(self._on_fields, names=["rows", "cols", "values", "slicers"])
         self.w_field_slicer_box = W.VBox()
         fields_tab = W.VBox([
@@ -231,6 +394,28 @@ class Explorer:
             self.w_field_slicer_box,
         ])
 
+        # -- timeline tab: save/note/replay checkpoints of the whole recipe
+        self.w_checkpoint_note = W.Text(placeholder="what does this state show? (optional note)", description="Note",
+                                        style=st, layout=W.Layout(width="420px"))
+        self.w_checkpoint_save = W.Button(description="Save checkpoint", icon="bookmark", button_style="primary")
+        self.w_checkpoint_delete = W.Button(description="Delete current", icon="trash")
+        self.w_timeline_slider = W.IntSlider(min=0, max=0, value=0, description="Checkpoint", style=st, layout=W.Layout(width="420px"))
+        self.w_timeline_play = W.Play(min=0, max=0, value=0, interval=1200)
+        W.jslink((self.w_timeline_play, "value"), (self.w_timeline_slider, "value"))
+        self.w_timeline_note = W.HTML()
+        self.w_timeline_list = W.HTML()
+        timeline_tab = W.VBox([
+            W.HTML(
+                "<i>Save a labeled checkpoint of the whole recipe (layout, slices, style, marks ...) at any "
+                "point, then scrub or play back through them — each step re-renders the view as it was at that "
+                "point, with the note you wrote for it.</i>"
+            ),
+            W.HBox([self.w_checkpoint_note, self.w_checkpoint_save, self.w_checkpoint_delete]),
+            W.HBox([self.w_timeline_play, self.w_timeline_slider]),
+            self.w_timeline_note,
+            self.w_timeline_list,
+        ])
+
         # -- code, profile, data, stats tabs; output; log panel
         self.w_code = W.HTML()
         self.w_out = W.HTML()
@@ -242,14 +427,18 @@ class Explorer:
         self.w_stats_btn = W.Button(description="Refresh stats", icon="clock-o")
         stats_tab = W.VBox([W.HTML("<i>The seven costliest kinds of step so far (wall time, CPU time, peak memory delta).</i>"), self.w_stats_btn, self.w_stats])
 
-        self.tabs = W.Tab(children=[layout_tab, hist_tab, slice_tab, reduce_tab, chains_tab, style_tab, self.w_code, self.w_profile, self.w_data, stats_tab, fields_tab])
-        for i, t in enumerate(["Layout", "Histogram", "Slicers", "Reduce & cluster", "Chains", "Style", "Code", "Profile", "Data", "Stats", "Fields"]):
+        self.tabs = W.Tab(children=[layout_tab, hist_tab, slice_tab, reduce_tab, chains_tab, style_tab, self.w_code,
+                                    self.w_profile, self.w_data, stats_tab, fields_tab, timeline_tab])
+        for i, t in enumerate(["Layout", "Histogram", "Slicers", "Reduce & cluster", "Chains", "Style", "Code",
+                               "Profile", "Data", "Stats", "Fields", "Timeline"]):
             self.tabs.set_title(i, t)
         self.FIELDS_TAB = 10
+        self.TIMELINE_TAB = 11
         top = W.HBox([self.w_mode, self.w_best, self.w_suggest_btn, self.w_suggest, self.w_undo, self.w_reset])
         self.box = W.VBox([top, self.tabs, self.w_status, self.w_out, W.HTML("<b style='font-size:11px;color:#666'>log</b>"), self.w_log])
         self._refresh_data_tab()
         self._refresh_log()
+        self._refresh_timeline()
 
         # -- wiring
         self.w_mode.observe(self._on_mode, names="value")
@@ -280,6 +469,9 @@ class Explorer:
         for w in (self.w_state, self.w_chain_by, self.w_chain_time, self.w_chain_norm):
             w.observe(self._on_chain, names="value")
         self.w_stats_btn.on_click(lambda _: self._refresh_stats())
+        self.w_checkpoint_save.on_click(lambda _: self.save_checkpoint(self.w_checkpoint_note.value))
+        self.w_checkpoint_delete.on_click(lambda _: self._delete_checkpoint())
+        self.w_timeline_slider.observe(self._on_timeline, names="value")
 
     # ------------------------------------------------------------------ recipe -> view
 
@@ -287,7 +479,7 @@ class Explorer:
         return {
             "spec": dict(self.spec), "slices": list(self.slices), "mode": self.mode, "hist": dict(self.hist),
             "reduce": dict(self.reduce), "display": dict(self.display), "options": self.options, "refit": self.refit_sliced,
-            "chain": dict(self.chain),
+            "chain": dict(self.chain), "field_slicers": list(self.field_slicers), "marks": dict(self.marks),
         }
 
     def _restore(self, snap: Dict[str, Any]) -> None:
@@ -295,6 +487,8 @@ class Explorer:
         self.hist, self.reduce, self.display = dict(snap["hist"]), dict(snap["reduce"]), dict(snap["display"])
         self.options, self.refit_sliced = snap["options"], snap["refit"]
         self.chain = dict(snap.get("chain", self.chain))
+        self.field_slicers = list(snap.get("field_slicers", self.field_slicers))
+        self.marks = dict(snap.get("marks", self.marks))
         self._sync_recipe_widgets()
 
     def _sync_recipe_widgets(self) -> None:
@@ -331,6 +525,7 @@ class Explorer:
             self.w_fields.theme = str(d.get("theme", "light"))
             self.w_fields.set_zones(rows=list(names(rows)), cols=list(names(cols)),
                                     values=[self.spec["values"]] if self.spec.get("values") else [], slicers=self.field_slicers)
+            self.w_fields.marks = dict(self.marks)
         finally:
             self._syncing = False
 

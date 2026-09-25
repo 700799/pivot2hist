@@ -40,7 +40,7 @@ from ._semantic import HIERARCHY, infer_semantic
 from ._survey import Machine, PagedSource, Plan, Survey, downcast, load_planned, survey
 from ._view import HIST, PIVOT, Derived, Filter, View
 
-__version__ = "0.9.0"
+__version__ = "0.10.0"
 
 _PLANNED_KEYS = ("memory_budget_mb", "mode", "columns", "query", "table", "sample_rows", "page_rows")
 

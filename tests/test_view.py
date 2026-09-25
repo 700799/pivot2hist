@@ -7,6 +7,18 @@ import pytest
 import pivot2hist as p2h
 
 
+def test_clone_shares_source_but_is_independent(fw):
+    base = p2h.fit(fw, max_rows=12, max_cols=6)
+    a = base.clone().slice(action="deny")
+    b = base.clone().toggle()
+    assert a is not base and b is not base
+    assert a.source is base.source and b.source is base.source  # no data copy
+    assert base.filters == () and a.filters != ()
+    assert base.mode == "pivot" and b.mode == "hist"
+    assert base._cache is not a._cache and a._cache is not b._cache
+    assert a.pivot().shape[0] <= base.pivot().shape[0]
+
+
 def test_toggle_round_trip(fw):
     v = p2h.fit(fw, max_rows=12, max_cols=6)
     h = v.toggle()

@@ -314,6 +314,26 @@ class View:
         kw.update(changes)
         return View(**kw)
 
+    def clone(self) -> "View":
+        """An independent copy of this View, for zero extra memory or disk.
+
+        Views are already immutable, so this is the same object graph with a fresh,
+        empty render cache: the underlying frame (or paged source/survey) is *shared by
+        reference*, not copied, and every field on the clone (layout, options, filters,
+        spec, display, derived columns) is its own independent value, not aliased to the
+        original - changing one (e.g. ``.slice()``, ``.style()``) never affects the
+        other. Handy for fanning one loaded/profiled dataset out into several notebook
+        cells that each explore a different layout, without re-reading the source or
+        duplicating it in RAM::
+
+            base = p2h.fit("huge.parquet")   # surveyed, profiled, fitted once
+            a = base.clone().slice(action="deny").style(theme="graphite")
+            b = base.clone().histogram("bytes")
+            # `a` and `b` share the same underlying data; neither's cache or
+            # slices/style touch the other, or `base`.
+        """
+        return self._clone()
+
     # ------------------------------------------------------------------ state
 
     @property

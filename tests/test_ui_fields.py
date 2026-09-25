@@ -6,6 +6,7 @@ import pivot2hist as p2h
 from pivot2hist.ui_fields import (
     FIELD_THEMES,
     HAS_ANYWIDGET,
+    MARK_PALETTE,
     ZONES,
     FieldListFallback,
     chip_html,
@@ -121,3 +122,61 @@ def test_field_list_anywidget_traits_and_events(prof):
     assert "src_ip" in snap and "#161a20" in snap
     assert "_esm" in dir(FieldList) or hasattr(FieldList, "_esm")
     assert "applyTheme" in FieldList._esm and "dragstart" in FieldList._esm
+
+
+def test_chip_html_mark_styling():
+    f = {"name": "src_ip", "kind": "categorical", "semantic": "", "count": 100, "distinct": 5,
+         "variety": 0.05, "nulls": 0.0, "examples": "1.2.3.4"}
+    plain = chip_html(f)
+    marked = chip_html(f, mark="#e5484d")
+    assert "border-left" not in plain
+    assert "border-left:4px solid #e5484d" in marked
+    _xml_fragment(marked)
+
+
+def test_zones_html_threads_marks_through(prof):
+    fields = field_stats(prof)
+    html = zones_html(fields, {"rows": ["src_ip"]}, marks={"src_ip": "#3b82f6"})
+    _xml_fragment(html)
+    assert "#3b82f6" in html
+
+
+def test_fallback_paint_and_unmark(prof):
+    fields = field_stats(prof)
+    w = FieldListFallback(fields, rows=["src_ip"])
+    assert w.marks == {}
+    w.paint("src_ip", "red")
+    assert w.marks == {"src_ip": MARK_PALETTE["red"]}
+    w.paint("src_ip", "#123456")  # raw CSS color, not just named palette
+    assert w.marks == {"src_ip": "#123456"}
+    w.paint("action", "blue")
+    w.unmark("src_ip")
+    assert w.marks == {"action": MARK_PALETTE["blue"]}
+    w.unmark()
+    assert w.marks == {}
+    snap = w.snapshot_html()
+    _xml_fragment(snap)
+
+
+def test_make_field_list_constructor_marks(prof):
+    w = make_field_list(prof, rows=["src_ip"], marks={"src_ip": "yellow"})
+    assert w.marks == {"src_ip": MARK_PALETTE["yellow"]}
+
+
+@pytest.mark.skipif(not HAS_ANYWIDGET, reason="anywidget not installed")
+def test_field_list_anywidget_paint_and_unmark(prof):
+    from pivot2hist.ui_fields import FieldList
+
+    w = FieldList(fields=field_stats(prof))
+    seen = []
+    w.observe(lambda ch: seen.append(dict(ch["new"])), names="marks")
+    w.paint("src_ip", "red")
+    assert w.marks == {"src_ip": MARK_PALETTE["red"]}
+    assert seen == [{"src_ip": MARK_PALETTE["red"]}]
+    w.paint("src_ip", None)
+    assert w.marks == {}
+    w.paint("dst_port", "green")
+    w.paint("action", "blue")
+    w.unmark()
+    assert w.marks == {}
+    assert "cycleMark" in FieldList._esm  # click-to-highlight is wired in the JS too
