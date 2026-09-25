@@ -1181,7 +1181,7 @@ class Explorer:
             # the title (with the slices as chips, removable when the pane can report clicks) lives in the pane
             self.w_out.value = self.view.html(title=True, removable_slices=hasattr(self.w_out, "clicked"))
             st.detail = f"rebuild -> {self.view.layout.describe()}"
-        self.w_status.value = f"<span style='color:#555;font-size:12px'>{_html.escape(self.view.title(slices=False))}</span>"
+        self.w_status.value = ""  # errors only; the pane carries the title and the slice chips
         self.w_code.value = "<pre style='font-size:12px'>" + _html.escape(self.code()) + "</pre>"
         self._sync_widgets()
         self._refresh_stats()

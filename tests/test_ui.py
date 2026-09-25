@@ -13,7 +13,7 @@ def ex(fw):
 
 def test_explorer_builds_and_renders(ex):
     assert isinstance(ex, Explorer)
-    assert "<table" in ex.w_out.value and "pivot" in ex.w_status.value and "pivot" in ex.w_out.value
+    assert "<table" in ex.w_out.value and "pivot ·" in ex.w_out.value and ex.w_status.value == ""
     assert "p2h.fit(df" in ex.code()
     assert ex._repr_mimebundle_() is not None
 
