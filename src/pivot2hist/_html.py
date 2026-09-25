@@ -3,9 +3,11 @@
 Both render in any notebook front-end (Jupyter, Lab, VS Code, Colab, nbviewer, GitHub)
 because they are plain HTML/SVG with inline styles: no widget extension, no JS, no CSS
 framework. Colours are a colour-blind-safe categorical palette (Okabe-Ito) for series and
-a single sequential ramp for heat, in two themes: ``"light"`` (the default, unchanged from
-earlier releases) and ``"graphite"`` (a modern dark theme: charcoal panels, soft borders,
-a blue accent) — pass ``theme="graphite"`` to any function here, or ``view.style(theme=...)``.
+a single sequential ramp for heat, in three themes: ``"light"`` (the default, unchanged from
+earlier releases), ``"graphite"`` (a modern dark theme: charcoal panels, soft borders, a
+blue accent) and ``"gunmetal"`` (cool blue-greys like brushed steel, a steel-blue heat
+ramp, copper for negatives) — pass ``theme=...`` to any function here, or
+``view.style(theme=...)``.
 """
 from __future__ import annotations
 
@@ -25,7 +27,7 @@ PALETTE = ("#0072B2", "#E69F00", "#009E73", "#D55E00", "#CC79A7", "#56B4E9", "#F
 PALETTE_GRAPHITE = ("#5B9BD5", "#F2B035", "#3FC79A", "#E8785A", "#D98CC0", "#7FC8F0", "#E8DE5A", "#9AA3B1")
 FONT = "font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif"
 MONO = "font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace"
-THEMES: Tuple[str, ...] = ("light", "graphite")
+THEMES: Tuple[str, ...] = ("light", "graphite", "gunmetal")
 
 #: One colour token set per theme. ``light`` reproduces the literal colours this module
 #: always used, so passing no ``theme`` (or ``theme="light"``) renders byte-identical output.
@@ -70,7 +72,30 @@ PALETTES: Dict[str, Dict[str, str]] = {
         "text_on_heat_light": "#0f1216", "text_on_heat_dark": "#eef1f5", "heat_text_switch": 1.1,
         "palette": PALETTE_GRAPHITE,
     },
+    # gunmetal: cool blue-greys like brushed steel, a steel-blue heat ramp, copper for negatives
+    "gunmetal": {
+        "page_bg": "#1f262d", "panel_pad": "2px", "panel_radius": "10px",
+        "border": "#3d4a56", "border_soft": "#33404b", "row_border": "#2f3a45",
+        "head_bg": "#2c3641", "head_text": "#e6ebf0", "head_muted": "#9fb0bf",
+        "subhead_bg": "#28313b", "subhead_text": "#9fb0bf",
+        "total_bg": "#2a343e", "total_bg_strong": "#313c47",
+        "sub_bg": "#2b3640", "sub_border": "#46545f", "sub_text": "#c8d2db",
+        "cell_bg": "#262f38", "cell_text": "#dde4ea", "cell_border": "#2f3a45",
+        "bar_track": "#37434f", "white": "#eef2f5", "dark_text": "#111518",
+        "outline_bg": "#2b3640", "outline_chevron": "#8fb3d1", "outline_count": "#8a98a6",
+        "outline_border": "#46545f", "outline_outer_border": "#3d4a56",
+        "svg_title": "#c5cfd8", "svg_axis_text": "#9fb0bf", "svg_axis_line": "#55636f",
+        "svg_grid": "#313c47", "svg_xlabel": "#c5cfd8", "svg_group_line": "#66768a",
+        "svg_group_text": "#c5cfd8", "svg_value_text": "#c5cfd8", "svg_legend_text": "#c5cfd8",
+        "svg_density": "#eef2f5", "empty_text": "#8a98a6",
+        "heat_pos_from": (38, 47, 56), "heat_pos_to": (94, 150, 196),
+        "heat_neg_from": (38, 47, 56), "heat_neg_to": (196, 118, 84),
+        "text_on_heat_light": "#111518", "text_on_heat_dark": "#eef2f5", "heat_text_switch": 1.1,
+        "palette": ("#6EA0C9", "#D0895E", "#7FB59A", "#D9B96C", "#B892B8", "#8FC3E6", "#C8C27A", "#A7B1BC"),
+    },
 }
+#: The gunmetal theme's series colours: steel, copper, sage, sand, mauve, sky, khaki, silver.
+PALETTE_GUNMETAL = PALETTES["gunmetal"]["palette"]
 
 
 def _pal(theme: str) -> Dict[str, Any]:
@@ -656,4 +681,4 @@ def hist_svg(
     return _wrap(None, "".join(out), theme=theme, chips=chips, removable_chips=removable_chips)
 
 
-__all__ = ["pivot_html", "hist_svg", "grid_html", "slice_chips", "heat_color", "PALETTE", "PALETTE_GRAPHITE", "PALETTES", "THEMES"]
+__all__ = ["pivot_html", "hist_svg", "grid_html", "slice_chips", "heat_color", "PALETTE", "PALETTE_GRAPHITE", "PALETTE_GUNMETAL", "PALETTES", "THEMES"]

@@ -674,3 +674,12 @@ def test_topbar_clusters_and_tab_sections(ex):
     assert snap.count("text-transform:uppercase") >= 4  # the four group heads read as sections
     assert "inset 0 -3px 0" in snap and ">view<" in snap and ">layout<" in snap and ">history<" in snap
     assert snap.index(">view<") < snap.index("Explore")
+
+
+def test_gunmetal_theme_in_explorer(ex):
+    assert "gunmetal" in ex.w_theme.options
+    ex.w_theme.value = "gunmetal"
+    assert ex.display["theme"] == "gunmetal" and ex.w_fields.theme == "gunmetal"
+    assert "#1f262d" in ex.w_out.value and ex._CHROME_THEME["gunmetal"]["accent"] in ex.w_css.value
+    assert ex._LOG_THEME["gunmetal"]["bg"] in ex.w_log.value
+    assert "#1f262d" in ex.snapshot_html() and "v.style(theme='gunmetal')" in ex.code()

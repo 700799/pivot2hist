@@ -33,6 +33,7 @@ from ._compare import METRICS, METRIC_HELP, Comparison, Facets
 from ._explain import Explanation, cell_filters, parse_cell
 from ._prompt import DEFAULT_QUESTION, Prompt
 from ._fit import AGGS, COUNT, FitOptions, Layout
+from ._html import THEMES
 from ._log import log
 from ._profile import BOOLEAN, CATEGORICAL, DATETIME, NUMERIC, Profile, profile
 from ._view import HIST, PIVOT, View
@@ -684,6 +685,7 @@ class Explorer:
     _LOG_THEME = {
         "light": {"text": "#333", "bg": "#fafafa", "border": "#e5e5e5"},
         "graphite": {"text": "#c7ccd6", "bg": "#1b2128", "border": "#333a45"},
+        "gunmetal": {"text": "#c5cfd8", "bg": "#262f38", "border": "#3d4a56"},
     }
 
     def _refresh_log(self) -> None:
@@ -794,7 +796,7 @@ class Explorer:
         ])
 
         # -- style tab
-        self.w_theme = W.Dropdown(options=["light", "graphite"], value=str(self.display.get("theme", "light")), description="Theme", style=st)
+        self.w_theme = W.Dropdown(options=list(THEMES), value=str(self.display.get("theme", "light")), description="Theme", style=st)
         self.w_heat = W.Dropdown(options=["table", "column", "row", "surprise", "none"], value=str(self.display.get("heat", "table")), description="Heat", style=st)
         self.w_totals = W.Checkbox(value=bool(self.display.get("totals", False)), description="totals")
         self.w_bars = W.Checkbox(value=bool(self.display.get("bars", False)), description="in-cell bars")
@@ -1709,6 +1711,11 @@ class Explorer:
             "bg": "#161a20", "panel": "#1b2128", "field": "#20262e", "border": "#333a45",
             "text": "#e5e9ef", "muted": "#98a1b0", "accent": "#5b9be0", "on_accent": "#0f1216",
             "input_style": "border:1px solid #333a45;border-radius:6px;padding:2px 4px;background:#20262e;color:#e5e9ef",
+        },
+        "gunmetal": {
+            "bg": "#1f262d", "panel": "#262f38", "field": "#2c3641", "border": "#3d4a56",
+            "text": "#e6ebf0", "muted": "#9fb0bf", "accent": "#6ea0c9", "on_accent": "#111518",
+            "input_style": "border:1px solid #3d4a56;border-radius:6px;padding:2px 4px;background:#2c3641;color:#e6ebf0",
         },
     }
 

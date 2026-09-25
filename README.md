@@ -804,8 +804,10 @@ fan one loaded/profiled dataset out into several independent variables cheaply.
 
 **Theme**: `v.style(theme="graphite")` (or the Style tab's Theme dropdown) switches every
 rendered surface — the heatmap, the histogram, the Fields pane, the log panel, and (for
-`snapshot_html()`) the explorer's own chrome — to a dark, modern look; `theme="light"` is
-the default and renders byte-identical to earlier releases.
+`snapshot_html()`) the explorer's own chrome — to a dark, modern look; `theme="gunmetal"`
+is a cooler, brushed-steel take on it (blue-grey panels, a steel-blue heat ramp, copper
+for negatives, a steel / copper / sage / sand series palette); `theme="light"` is the
+default and renders byte-identical to earlier releases.
 
 ![explorer, Fields tab, graphite theme, on a paged Parquet source](docs/explorer-fields-graphite.png)
 

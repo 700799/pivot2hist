@@ -180,3 +180,11 @@ def test_field_list_anywidget_paint_and_unmark(prof):
     w.unmark()
     assert w.marks == {}
     assert "cycleMark" in FieldList._esm  # click-to-highlight is wired in the JS too
+
+
+def test_gunmetal_field_theme_and_js_table():
+    from pivot2hist.ui_fields import FIELD_THEMES, _ESM, theme_style_block
+
+    assert set(FIELD_THEMES["gunmetal"]) == set(FIELD_THEMES["graphite"])
+    assert "--p2h-bg:#1f262d" in theme_style_block("gunmetal")
+    assert "gunmetal: {" in _ESM and '"#1f262d"' in _ESM

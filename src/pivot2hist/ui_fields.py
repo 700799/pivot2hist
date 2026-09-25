@@ -132,7 +132,7 @@ def zones_html(fields: List[Dict[str, Any]], zones: Dict[str, List[str]], *, int
 
 #: CSS custom properties per theme; :func:`theme_style_block` emits one as a scoped
 #: ``<style>`` block so the field list (and anything else using the same ``--p2h-*``
-#: tokens) can switch between a light and a graphite look without editing markup.
+#: tokens) can switch between the light, graphite and gunmetal looks without editing markup.
 FIELD_THEMES = {
     "light": {
         "bg": "#ffffff", "panel": "#fbfcfd", "border": "#dfe4ea", "text": "#1f2937",
@@ -143,6 +143,11 @@ FIELD_THEMES = {
         "bg": "#161a20", "panel": "#1b2128", "border": "#333a45", "text": "#e5e9ef",
         "muted": "#98a1b0", "accent": "#5b9be0", "accent-soft": "#22384d", "chip": "#1e242c",
         "var-track": "#2a313b", "danger": "#e8785a", "hint": "#7a8494",
+    },
+    "gunmetal": {
+        "bg": "#1f262d", "panel": "#262f38", "border": "#3d4a56", "text": "#e6ebf0",
+        "muted": "#9fb0bf", "accent": "#6ea0c9", "accent-soft": "#2b3f52", "chip": "#2a333d",
+        "var-track": "#37434f", "danger": "#d0895e", "hint": "#8a98a6",
     },
 }
 
@@ -181,6 +186,7 @@ _ESM = r"""
 const THEME_VARS = {
   light: { bg: "#ffffff", panel: "#fbfcfd", border: "#dfe4ea", text: "#1f2937", muted: "#667", accent: "#0072B2", "accent-soft": "#e8f1fa", chip: "#ffffff", "var-track": "#e5eaf0", danger: "#c00", hint: "#99a" },
   graphite: { bg: "#161a20", panel: "#1b2128", border: "#333a45", text: "#e5e9ef", muted: "#98a1b0", accent: "#5b9be0", "accent-soft": "#22384d", chip: "#1e242c", "var-track": "#2a313b", danger: "#e8785a", hint: "#7a8494" },
+  gunmetal: { bg: "#1f262d", panel: "#262f38", border: "#3d4a56", text: "#e6ebf0", muted: "#9fb0bf", accent: "#6ea0c9", "accent-soft": "#2b3f52", chip: "#2a333d", "var-track": "#37434f", danger: "#d0895e", hint: "#8a98a6" },
 };
 function applyTheme(el, theme) {
   const vars = THEME_VARS[theme] || THEME_VARS.light;

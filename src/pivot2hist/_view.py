@@ -1045,8 +1045,9 @@ class View:
     def style(self, **display: Any) -> "View":
         """Display options for :meth:`html` / notebooks.
 
-        ``theme``: ``"light"`` (default) or ``"graphite"`` (a dark, modern theme), both
-        apply to pivots and histograms alike. Pivot: ``heat`` (``"table"`` | ``"column"``
+        ``theme``: ``"light"`` (default), ``"graphite"`` (a dark, modern theme) or
+        ``"gunmetal"`` (cool blue-greys like brushed steel, steel-blue heat, copper for
+        negatives), all applying to pivots and histograms alike. Pivot: ``heat`` (``"table"`` | ``"column"``
         | ``"row"`` | ``"none"``), ``bars``, ``totals``, ``compact``, ``max_rows``,
         ``subtotals`` (a subtotal row after each outer row group), ``outline`` (nested
         rows as collapsible groups). Histogram: ``stacked``, ``density``, ``log_y``,

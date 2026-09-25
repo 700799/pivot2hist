@@ -130,3 +130,17 @@ def test_view_style_theme_subtotals_outline(fw):
     assert "∑" in v.style(subtotals=True, totals=True).html()
     assert "<details" in v.style(outline=True).html()
     assert v.toggle().style(theme="graphite").html() != v.toggle().html()
+
+
+def test_gunmetal_theme_renders_everywhere(fw):
+    from pivot2hist._html import PALETTES, THEMES, PALETTE_GUNMETAL
+
+    assert THEMES == ("light", "graphite", "gunmetal") and set(PALETTES["gunmetal"]) == set(PALETTES["graphite"])
+    v = p2h.fit(fw, max_rows=8, max_cols=4)
+    gun = pivot_html(v.pivot(), theme="gunmetal")
+    assert "#1f262d" in gun and "data-p2h-theme='gunmetal'" in gun and gun != pivot_html(v.pivot(), theme="graphite")
+    svg = hist_svg(v.toggle().bins(), theme="gunmetal")
+    assert "#1f262d" in svg and PALETTE_GUNMETAL[0] in svg
+    assert "#1f262d" in v.slice(action="deny").style(theme="gunmetal").html()
+    assert "#1f262d" in v.compare(action="deny").style(theme="gunmetal").html()
+    assert "#1f262d" in v.facet("action").style(theme="gunmetal").html()
