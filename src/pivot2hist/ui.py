@@ -86,6 +86,35 @@ class Explorer:
         """Stop listening to the step log."""
         self._unlisten()
 
+    # ------------------------------------------------------------------ chrome
+
+    @staticmethod
+    def _cluster(caption: str, *widgets: Any) -> Any:
+        """A labelled group of top-bar controls (a caption plus the widgets, in one frame)."""
+        label = W.HTML(
+            f"<span class='p2h-caption' style='font-size:10px;letter-spacing:.08em;text-transform:uppercase;"
+            f"color:#889;margin:0 4px 0 2px'>{_html.escape(caption)}</span>",
+            layout=W.Layout(align_self="center"),
+        )
+        box = W.HBox([label, *widgets], layout=W.Layout(align_items="center"))
+        box.add_class("p2h-cluster")
+        return box
+
+    def _chrome_css(self) -> str:
+        """The stylesheet that gives the explorer its visual hierarchy: framed control
+        clusters in the top bar, section-styled group tabs, plain inner tabs."""
+        c = self._CHROME_THEME.get(str(self.display.get("theme", "light")), self._CHROME_THEME["light"])
+        return (
+            "<style>"
+            ".p2h-topbar{gap:10px;flex-wrap:wrap;margin:2px 0 6px 0}"
+            f".p2h-cluster{{padding:3px 8px 3px 4px;border:1px solid {c['border']};border-radius:8px;background:{c['field']};gap:4px}}"
+            ".p2h-groups .lm-TabBar-tab,.p2h-groups .p-TabBar-tab{font-weight:600;text-transform:uppercase;letter-spacing:.05em;font-size:12px}"
+            f".p2h-groups .lm-TabBar-tab.lm-mod-current,.p2h-groups .p-TabBar-tab.p-mod-current{{box-shadow:inset 0 -3px 0 {c['accent']}}}"
+            ".p2h-subtabs .lm-TabBar-tab,.p2h-subtabs .p-TabBar-tab{font-weight:400;text-transform:none;letter-spacing:0;font-size:13px}"
+            ".p2h-subtabs .lm-TabBar-tab.lm-mod-current,.p2h-subtabs .p-TabBar-tab.p-mod-current{box-shadow:none;font-weight:600}"
+            "</style>"
+        )
+
     # ------------------------------------------------------------------ tabs
 
     def tab_names(self) -> List[str]:
@@ -971,8 +1000,19 @@ class Explorer:
         for gi, (gname, _) in enumerate(groups):
             self.tabs.set_title(gi, gname)
         self.FIELDS_TAB, self.TIMELINE_TAB, self.INSIGHTS_TAB, self.COMPARE_TAB, self.INSPECT_TAB = "Fields", "Timeline", "Insights", "Compare", "Inspect"
-        top = W.HBox([self.w_mode, self.w_best, self.w_suggest_btn, self.w_suggest, self.w_undo, self.w_reset])
-        self.box = W.VBox([top, self.tabs, self.w_status, self.w_out, W.HTML("<b style='font-size:11px;color:#666'>log</b>"), self.w_log])
+        # the top bar's controls in three labelled clusters, so the row reads as view / layout / history
+        # rather than six unrelated buttons; the group tabs get a section look distinct from the inner tabs
+        self.top = W.HBox([
+            self._cluster("view", self.w_mode),
+            self._cluster("layout", self.w_best, self.w_suggest_btn, self.w_suggest),
+            self._cluster("history", self.w_undo, self.w_reset),
+        ])
+        self.top.add_class("p2h-topbar")
+        self.tabs.add_class("p2h-groups")
+        for inner in outer:
+            inner.add_class("p2h-subtabs")
+        self.w_css = W.HTML(self._chrome_css())
+        self.box = W.VBox([self.w_css, self.top, self.tabs, self.w_status, self.w_out, W.HTML("<b style='font-size:11px;color:#666'>log</b>"), self.w_log])
         self._refresh_data_tab()
         self._refresh_log()
         self._refresh_timeline()
@@ -1266,6 +1306,8 @@ class Explorer:
         if hasattr(self, "w_cell_row"):
             self._refresh_cell_pickers()
         self._refresh_log()  # picks up a theme change immediately, not just on the next log line
+        if hasattr(self, "w_css"):
+            self.w_css.value = self._chrome_css()
 
     def _refresh_stats(self) -> None:
         df = log.stats(7)
@@ -1590,16 +1632,27 @@ class Explorer:
             name = type(w).__name__
             if name in ("FieldList", "FieldListFallback"):
                 return w.snapshot_html()
+            classes = list(getattr(w, "_dom_classes", ()))
             if name in ("VBox", "HBox", "Box"):
                 direction = "column" if name == "VBox" else "row"
                 inner = "".join(render(x) for x in w.children)
-                return f"<div style='display:flex;flex-direction:{direction};flex-wrap:wrap;gap:6px;align-items:flex-start;margin:2px 0'>{inner}</div>"
+                if "p2h-cluster" in classes:
+                    return (
+                        f"<div style='display:inline-flex;align-items:center;gap:4px;padding:3px 8px 3px 4px;border:1px solid {c['border']};"
+                        f"border-radius:8px;background:{c['field']};margin:2px 0'>{inner}</div>"
+                    )
+                gap = "10px" if "p2h-topbar" in classes else "6px"
+                return f"<div style='display:flex;flex-direction:{direction};flex-wrap:wrap;gap:{gap};align-items:flex-start;margin:2px 0'>{inner}</div>"
             if name == "Tab":
                 tab = w.selected_index or 0
+                section = "p2h-groups" in classes  # the outer, grouping tabs read as sections
                 heads = "".join(
                     f"<span style='padding:5px 12px;border:1px solid {c['border']};border-bottom:{'none' if i == tab else '1px solid ' + c['border']};"
                     f"border-radius:8px 8px 0 0;background:{c['panel'] if i == tab else c['bg']};color:{c['text']};"
-                    f"font-weight:{600 if i == tab else 400}'>{_html.escape(w.get_title(i) or str(i))}</span>"
+                    f"font-weight:{600 if (i == tab or section) else 400}"
+                    + (";text-transform:uppercase;letter-spacing:.05em;font-size:11px" if section else "")
+                    + (f";box-shadow:inset 0 -3px 0 {c['accent']}" if (section and i == tab) else "")
+                    + f"'>{_html.escape(w.get_title(i) or str(i))}</span>"
                     for i in range(len(w.children))
                 )
                 body = render(w.children[tab]) if w.children else ""

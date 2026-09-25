@@ -744,8 +744,12 @@ in four groups, the everyday loop up front:
 - **Session** — **Timeline** (checkpoints, see below), Profile, Data (the survey and
   plan), Stats (the seven costliest steps).
 
-`explorer.select_tab("Inspect")` / `explorer.current_tab()` address tabs by name. The
-active slices sit under the output's title as **chips** — one per slice, whatever put it
+The top bar's controls sit in three labelled clusters — *view* (Pivot / Histogram /
+Chains), *layout* (Best fit, Suggest, alternatives), *history* (Undo, Reset) — and the
+group tabs are styled as sections above the plain inner tabs, so the three rows read as
+a hierarchy rather than as one flat run of buttons. `explorer.select_tab("Inspect")` /
+`explorer.current_tab()` address tabs by name. The active slices sit under the output's
+title as **chips** — one per slice, whatever put it
 there (a slicer widget, the query box, top-N, a drilled-in cell) — and clicking a chip's
 × removes just that slice and resets its widget (`explorer.remove_slice(label)` from
 code). The same chips appear under any `View`'s rendering in a plain notebook, just not

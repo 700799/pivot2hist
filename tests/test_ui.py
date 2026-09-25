@@ -652,3 +652,25 @@ def test_export_errors_land_in_the_tab(ex):
     ex.cell = {"text": None}  # not an Explanation: the build fails, and says so in the tab
     ex.w_prompt_build.click()
     assert "color:#b00020" in ex.w_prompt_meta.value
+
+
+# --------------------------------------------------------------------------- visual hierarchy
+
+
+def test_topbar_clusters_and_tab_sections(ex):
+    captions = []
+    for box in ex.top.children:
+        assert "p2h-cluster" in box._dom_classes
+        captions.append(box.children[0].value)
+    assert [c for c in ("view", "layout", "history") if any(c in cap for cap in captions)] == ["view", "layout", "history"]
+    assert ex.w_mode in ex.top.children[0].children and ex.w_undo in ex.top.children[2].children
+    assert "p2h-groups" in ex.tabs._dom_classes and all("p2h-subtabs" in t._dom_classes for t in ex.tabs.children)
+    css = ex.w_css.value
+    assert ".p2h-groups .lm-TabBar-tab" in css and ".p2h-subtabs .lm-TabBar-tab" in css and ".p2h-cluster{" in css
+    assert ex._CHROME_THEME["light"]["accent"] in css
+    ex.w_theme.value = "graphite"
+    assert ex._CHROME_THEME["graphite"]["accent"] in ex.w_css.value and ex._CHROME_THEME["graphite"]["field"] in ex.w_css.value
+    snap = ex.snapshot_html(active_tab="Inspect")
+    assert snap.count("text-transform:uppercase") >= 4  # the four group heads read as sections
+    assert "inset 0 -3px 0" in snap and ">view<" in snap and ">layout<" in snap and ">history<" in snap
+    assert snap.index(">view<") < snap.index("Explore")
