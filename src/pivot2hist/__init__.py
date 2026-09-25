@@ -22,7 +22,7 @@ from typing import Any, Optional, Sequence, Union
 import pandas as pd
 
 
-from . import sample
+from . import agent, sample
 from ._binning import RULES, bin_count, bin_edges, bin_labels, kde
 from ._chains import sequences, steady_state, transition_matrix, transitions
 from ._cluster import COMETHODS, METHODS, cluster_frame, cluster_rows, cocluster, dbscan, kmeans
@@ -52,7 +52,14 @@ def _load_for_fit(data: Any, opts: dict):
     planned = {k: opts.pop(k) for k in _PLANNED_KEYS if k in opts}
     if _needs_plan(data) or planned:
         if not _needs_plan(data) and planned.get("mode", "auto") == "auto" and "memory_budget_mb" not in planned:
-            return load(data), None
+            frame = load(data)
+            cols = planned.get("columns")
+            if cols:
+                missing = [c for c in cols if c not in frame.columns]
+                if missing:
+                    raise KeyError(f"unknown column(s) {missing}; available: {list(frame.columns)[:20]}")
+                frame = frame[list(cols)]
+            return frame, None
         frame, sv = load_planned(data, **planned)
         return frame, sv
     return load(data), None
@@ -176,5 +183,5 @@ __all__ = [
     "build_table", "fit_layout", "suggest_layouts", "bin_edges", "bin_count", "bin_labels", "kde",
     "cluster_frame", "cluster_rows", "cocluster", "kmeans", "dbscan", "METHODS", "COMETHODS",
     "infer_semantic", "HIERARCHY", "DEFAULT_WEIGHTS",
-    "RULES", "AGGS", "PIVOT", "HIST", "sample", "__version__",
+    "RULES", "AGGS", "PIVOT", "HIST", "sample", "agent", "__version__",
 ]

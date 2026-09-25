@@ -4,12 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pivot2hist"
-version = "0.3.0"
-description = "Auto-fitted pivot tables that toggle to histograms and back, with slicing, clustering, Markov chains, paging for big data and Jupyter menus. For cyber logs or any tabular data."
+version = "0.4.0"
+description = "Auto-fitted pivot tables that toggle to histograms and back, with slicing, clustering, Markov chains, paging for big data, an MCP server for LLM agents and Jupyter menus. For cyber logs or any tabular data."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
-keywords = ["pivot", "pivot-table", "histogram", "pandas", "cyber", "logs", "eda", "security", "jupyter", "ipywidgets", "clustering", "duckdb", "parquet", "markov"]
+keywords = ["pivot", "pivot-table", "histogram", "pandas", "cyber", "logs", "eda", "security", "jupyter", "ipywidgets", "clustering", "duckdb", "parquet", "markov", "mcp", "llm", "agent", "anywidget"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -31,15 +31,17 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-jupyter = ["ipywidgets>=8"]
+jupyter = ["ipywidgets>=8", "anywidget>=0.9"]
 plot = ["matplotlib>=3.5"]
 parquet = ["pyarrow>=10"]
 duckdb = ["duckdb>=0.9"]
 cluster = ["scikit-learn>=1.3"]
-dev = ["pytest>=7", "build", "ipywidgets>=8", "pyarrow>=10", "duckdb>=0.9"]
+mcp = ["mcp>=1.0"]
+dev = ["pytest>=7", "build", "ipywidgets>=8", "anywidget>=0.9", "pyarrow>=10", "duckdb>=0.9", "mcp>=1.0"]
 
 [project.scripts]
 pivot2hist = "pivot2hist.cli:main"
+pivot2hist-mcp = "pivot2hist.mcp_server:main"
 
 [project.urls]
 Homepage = "https://github.com/700799/pivot2hist"

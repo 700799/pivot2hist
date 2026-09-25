@@ -1094,15 +1094,22 @@ class View:
         flat = t.reset_index()
         flat.columns = [str(c) for c in flat.columns]
         records = json.loads(flat.to_json(orient="records", date_format="iso"))
-        return {
+        d = {
             "mode": self._mode,
             "layout": self._layout.to_dict(),
             "slices": self.slices,
             "rows": int(len(self.data)),
-            "source_rows": int(len(self._source)),
+            "source_rows": int(len(self._paged) if self._paged is not None else len(self._source)),
             "shape": list(self.table().shape),
             "table": records,
         }
+        if self._paged is not None:
+            d["paged"] = True
+            d["source_rows_exact"] = False
+            d["pages"] = self._paged.survey.plan.n_pages
+        if self.approximate:
+            d["approximate"] = True
+        return d
 
     def to_json(self, **kw: Any) -> str:
         kw.setdefault("indent", 2)
