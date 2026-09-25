@@ -408,6 +408,102 @@ def compare(
     return c.to_dict(n)
 
 
+def _view_for(source: Source, *, rows: Any, cols: Any, values: Any, agg: Any, filters: Any, mode: str, on: Any, by: Any,
+              bins: Any, max_rows: int, max_cols: int, memory_budget_mb: Any, columns: Any, opts: Dict[str, Any]) -> Any:
+    from . import fit as _fit
+
+    v = _fit(
+        source, rows=list(rows) if rows is not None else None, cols=list(cols) if cols is not None else None,
+        values=values, agg=agg, max_rows=max_rows, max_cols=max_cols, memory_budget_mb=memory_budget_mb, columns=columns, **opts,
+    )
+    v = _apply_filters(v, filters)
+    if mode == "hist" or on is not None or by is not None:
+        v = v.histogram(on, by, bins=bins)
+    return v
+
+
+def rows(
+    source: Source,
+    *,
+    cell: Dict[str, Any],
+    n: int = 50,
+    rows: Optional[Sequence[str]] = None,
+    cols: Optional[Sequence[str]] = None,
+    values: Optional[str] = None,
+    agg: Optional[str] = None,
+    filters: Optional[Sequence[Filter]] = None,
+    mode: str = "pivot",
+    on: Optional[str] = None,
+    by: Optional[Union[str, Sequence[str]]] = None,
+    bins: Optional[Union[str, int]] = None,
+    max_rows: int = 40,
+    max_cols: int = 12,
+    memory_budget_mb: Optional[float] = None,
+    columns: Optional[Sequence[str]] = None,
+    **opts: Any,
+) -> Dict[str, Any]:
+    """The raw rows behind one cell of the pivot (or one bin of the histogram), with every
+    filter applied - the step after :func:`pivot` when a cell looks interesting.
+
+    ``cell`` is ``{column: label}`` for any axis column, using the labels :func:`pivot`
+    shows - a bin like ``"[1K, 2K)"``, a time bucket like ``"13:00"``, ``"(other)"`` for
+    the folded top-N remainder, ``"(null)"``, a roll-up like ``"10.0.1.0/24"`` - or a plain
+    value. Give one axis only to get a whole row or column. A column that is not on an
+    axis is applied as an ordinary filter. Same layout arguments as :func:`pivot`, so the
+    labels line up with the table you were just looking at. Returns ``cell``, ``layout``,
+    ``n_returned`` (capped at ``n``), ``n_total`` (all matching rows; ``None`` for a paged
+    source, which is scanned only up to ``n``) and ``rows`` as records.
+    """
+    v = _view_for(source, rows=rows, cols=cols, values=values, agg=agg, filters=filters, mode=mode, on=on, by=by, bins=bins,
+                  max_rows=max_rows, max_cols=max_cols, memory_budget_mb=memory_budget_mb, columns=columns, opts=opts)
+    from ._explain import _records
+
+    df = v.rows(n=n, **cell)
+    return {
+        "cell": {str(k): str(x) for k, x in cell.items()},
+        "layout": v.layout.describe(),
+        "n_returned": int(len(df)),
+        "n_total": (int(len(v.cell(**cell).data)) if v.paged is None else None),
+        "rows": _records(df),
+    }
+
+
+def explain(
+    source: Source,
+    *,
+    cell: Dict[str, Any],
+    n_rows: int = 10,
+    k: int = 5,
+    rows: Optional[Sequence[str]] = None,
+    cols: Optional[Sequence[str]] = None,
+    values: Optional[str] = None,
+    agg: Optional[str] = None,
+    filters: Optional[Sequence[Filter]] = None,
+    mode: str = "pivot",
+    on: Optional[str] = None,
+    by: Optional[Union[str, Sequence[str]]] = None,
+    bins: Optional[Union[str, int]] = None,
+    max_rows: int = 40,
+    max_cols: int = 12,
+    memory_budget_mb: Optional[float] = None,
+    columns: Optional[Sequence[str]] = None,
+    **opts: Any,
+) -> Dict[str, Any]:
+    """Why does this cell look the way it does? ``cell`` names it exactly as in
+    :func:`rows`. Returns the cell's ``observed`` value; for a count/sum on a 2-D table its
+    ``expected`` value under independence of the axes, ``ratio_to_expected`` and
+    ``direction`` (over/under); its shares of its row, column and the table; its ``rank``
+    among all cells; ``n_rows`` behind it; ``distinguishing`` - the ``k`` columns that most
+    set those rows apart from the rest of the data in view (a label over-represented here
+    with its share here vs elsewhere and a lift; a numeric whose median differs, as a
+    ratio), each with a ready-made ``text``; the first ``n_rows`` rows; and a one-paragraph
+    ``text`` saying all of it. Deterministic and local - no model call.
+    """
+    v = _view_for(source, rows=rows, cols=cols, values=values, agg=agg, filters=filters, mode=mode, on=on, by=by, bins=bins,
+                  max_rows=max_rows, max_cols=max_cols, memory_budget_mb=memory_budget_mb, columns=columns, opts=opts)
+    return dict(v.explain(n_rows=n_rows, k=k, **cell))
+
+
 def suggest(
     source: Source,
     n: int = 5,
@@ -499,4 +595,4 @@ def slicers(
     return {col: [{"value": val, "count": int(c)} for val, c in vals] for col, vals in raw.items()}
 
 
-__all__ = ["describe", "pivot", "llm_context", "insights", "compare", "suggest", "slicers", "anomalies", "FILTER_OPS"]
+__all__ = ["describe", "pivot", "llm_context", "insights", "compare", "rows", "explain", "suggest", "slicers", "anomalies", "FILTER_OPS"]

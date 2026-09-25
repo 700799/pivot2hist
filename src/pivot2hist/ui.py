@@ -29,11 +29,13 @@ from ._binning import RULES, human
 from ._chains import sequences as _sequences
 from ._cluster import COMETHODS, METHODS
 from ._compare import METRICS, METRIC_HELP, Comparison, Facets
+from ._explain import Explanation, cell_filters, parse_cell
 from ._fit import AGGS, COUNT, FitOptions, Layout
 from ._log import log
 from ._profile import BOOLEAN, CATEGORICAL, DATETIME, NUMERIC, Profile, profile
 from ._view import HIST, PIVOT, View
 from .ui_fields import _set_mark, make_field_list
+from .ui_output import make_output
 
 CHAINS = "chains"
 
@@ -464,6 +466,101 @@ class Explorer:
             else:
                 self.w_cmp_out.value = obj.html()
 
+    # ------------------------------------------------------------------ inspect
+
+    def _picked_cell(self) -> Tuple[Any, ...]:
+        row, col = self.w_cell_row.value, self.w_cell_col.value
+        if row is None and col is None:
+            raise ValueError("pick a row and/or a column in the Inspect tab first, or click a cell")
+        return (row, col) if col is not None else (row,)
+
+    def _show_cell_hint(self) -> None:
+        self.w_cell_out.value = (
+            "<i style='color:#999'>click a cell of the heatmap"
+            + ("" if hasattr(self.w_out, "clicked") else " (needs anywidget)")
+            + ", or pick a row / column above, then Explain</i>"
+        )
+
+    def explain(self, *args: Any, n_rows: Optional[int] = None, **labels: Any) -> Explanation:
+        """:meth:`View.explain` on the current view, shown in the Inspect tab. With no cell
+        given, explains the cell picked there (or the one last clicked). Returns the
+        :class:`~pivot2hist.Explanation`."""
+        if not args and not labels:
+            args = self._picked_cell()
+        n = self.w_cell_n.value if n_rows is None else int(n_rows)
+        ex = self.view.explain(*args, n_rows=n, **labels)
+        self.cell = ex
+        self.w_cell_out.value = ex._repr_html_()
+        return ex
+
+    def rows(self, *args: Any, n: Optional[int] = None, **labels: Any) -> pd.DataFrame:
+        """:meth:`View.rows` on the current view (the cell picked in the Inspect tab when
+        none is given)."""
+        if not args and not labels:
+            args = self._picked_cell()
+        return self.view.rows(*args, n=n, **labels)
+
+    def drill_into(self, *args: Any, **labels: Any) -> None:
+        """Slice to a cell by label and refit the layout on just those rows - the Inspect
+        tab's **Drill in**. With no cell given, the picked / last-clicked one. Undo
+        reverses it; the Code tab shows it as ``v.cell(...)``."""
+        if not args and not labels:
+            args = self._picked_cell()
+
+        def go() -> None:
+            given, extra = parse_cell(self.view, args, labels)
+            filters = cell_filters(self.view, given, extra)
+            payload = {**{c: str(v) for c, v in given.items()}, **extra}
+            self.slices.append(("cell", (payload, filters)))
+            self.refit_sliced = True
+
+        self._act(go)
+
+    def _explain_clicked(self) -> None:
+        try:
+            self.explain()
+        except Exception as e:  # noqa: BLE001 - surface any failure in the tab, not a traceback
+            self.w_cell_out.value = f"<span style='color:#b00020'>{_html.escape(type(e).__name__)}: {_html.escape(str(e))}</span>"
+
+    def _on_cell_click(self, change: Dict[str, Any]) -> None:
+        c = change["new"] or {}
+        row = tuple(str(x) for x in c.get("row") or ()) or None
+        col = tuple(str(x) for x in c.get("col") or ()) or None
+        if not self.view.layout.cols:
+            col = None  # a 1-D table's only column is the measure, not a level
+        self._syncing = True
+        try:
+            if row is not None and row in [v for _, v in self.w_cell_row.options]:
+                self.w_cell_row.value = row
+            if col is not None and col in [v for _, v in self.w_cell_col.options]:
+                self.w_cell_col.value = col
+        finally:
+            self._syncing = False
+        self.tabs.selected_index = self.INSPECT_TAB
+        self._explain_clicked()
+
+    def _refresh_cell_pickers(self) -> None:
+        """Row / column pickers follow the current table's labels (keeping a still-valid pick)."""
+        t = self.view.table()
+        lay = self.view.layout
+
+        def opts(index: pd.Index, hint: str) -> List[Tuple[str, Any]]:
+            out: List[Tuple[str, Any]] = [(hint, None)]
+            for x in list(index)[:200]:
+                tup = tuple(str(y) for y in (x if isinstance(x, tuple) else (x,)))
+                out.append((" / ".join(tup), tup))
+            return out
+
+        self._syncing = True
+        try:
+            row_prev, col_prev = self.w_cell_row.value, self.w_cell_col.value
+            self.w_cell_row.options = opts(t.index, "(any row)")
+            self.w_cell_col.options = opts(t.columns, "(any column)") if lay.cols else [("(any column)", None)]
+            self.w_cell_row.value = row_prev if row_prev in [v for _, v in self.w_cell_row.options] else None
+            self.w_cell_col.value = col_prev if col_prev in [v for _, v in self.w_cell_col.options] else None
+        finally:
+            self._syncing = False
+
     def _compare_code(self) -> List[str]:
         r = self._compare_recipe
         if not r:
@@ -718,9 +815,31 @@ class Explorer:
             self.w_cmp_out,
         ])
 
+        # -- inspect tab: one cell, interrogated (click a cell, or pick a row and a column)
+        self.w_cell_row = W.Dropdown(options=[("(any row)", None)], value=None, description="Row", style=st, layout=W.Layout(width="340px"))
+        self.w_cell_col = W.Dropdown(options=[("(any column)", None)], value=None, description="Column", style=st, layout=W.Layout(width="280px"))
+        self.w_cell_n = W.IntSlider(value=10, min=0, max=100, step=5, description="Rows shown", style=st)
+        self.w_cell_explain = W.Button(description="Explain", icon="search", button_style="primary",
+                                       tooltip="what's in this cell, and what sets its rows apart")
+        self.w_cell_drill = W.Button(description="Drill in", icon="level-down", tooltip="slice to this cell and refit the layout on it")
+        self.w_cell_out = W.HTML()
+        self.cell: Optional[Explanation] = None
+        inspect_tab = W.VBox([
+            W.HTML(
+                "<i>Click any cell of the heatmap (or bar of the histogram), or pick a row and a column here, "
+                "then <b>Explain</b>: the cell's value against what independence of the axes would predict, its "
+                "share of its row, column and the table, its rank, the rows behind it, and what sets those rows "
+                "apart from the rest of the data in view. <b>Drill in</b> slices to the cell and refits, so the "
+                "next layout is chosen for just those rows.</i>"
+            ),
+            W.HBox([self.w_cell_row, self.w_cell_col, self.w_cell_n]),
+            W.HBox([self.w_cell_explain, self.w_cell_drill]),
+            self.w_cell_out,
+        ])
+
         # -- code, profile, data, stats tabs; output; log panel
         self.w_code = W.HTML()
-        self.w_out = W.HTML()
+        self.w_out = make_output()
         self.w_status = W.HTML()
         self.w_log = W.HTML()
         self.w_profile = W.HTML("<pre style='font-size:11px'>" + _html.escape(self._profile.summary().to_string(index=False)) + "</pre>")
@@ -730,14 +849,16 @@ class Explorer:
         stats_tab = W.VBox([W.HTML("<i>The seven costliest kinds of step so far (wall time, CPU time, peak memory delta).</i>"), self.w_stats_btn, self.w_stats])
 
         self.tabs = W.Tab(children=[layout_tab, hist_tab, slice_tab, reduce_tab, chains_tab, style_tab, self.w_code,
-                                    self.w_profile, self.w_data, stats_tab, fields_tab, timeline_tab, insights_tab, compare_tab])
+                                    self.w_profile, self.w_data, stats_tab, fields_tab, timeline_tab, insights_tab, compare_tab,
+                                    inspect_tab])
         for i, t in enumerate(["Layout", "Histogram", "Slicers", "Reduce & cluster", "Chains", "Style", "Code",
-                               "Profile", "Data", "Stats", "Fields", "Timeline", "Insights", "Compare"]):
+                               "Profile", "Data", "Stats", "Fields", "Timeline", "Insights", "Compare", "Inspect"]):
             self.tabs.set_title(i, t)
         self.FIELDS_TAB = 10
         self.TIMELINE_TAB = 11
         self.INSIGHTS_TAB = 12
         self.COMPARE_TAB = 13
+        self.INSPECT_TAB = 14
         top = W.HBox([self.w_mode, self.w_best, self.w_suggest_btn, self.w_suggest, self.w_undo, self.w_reset])
         self.box = W.VBox([top, self.tabs, self.w_status, self.w_out, W.HTML("<b style='font-size:11px;color:#666'>log</b>"), self.w_log])
         self._refresh_data_tab()
@@ -785,6 +906,11 @@ class Explorer:
         self.w_cmp_vs_pin.on_click(lambda _: self.compare_with_baseline())
         self.w_cmp_clear.on_click(lambda _: self._clear_compare())
         self._refresh_compare()
+        self.w_cell_explain.on_click(lambda _: self._explain_clicked())
+        self.w_cell_drill.on_click(lambda _: self.drill_into())
+        if hasattr(self.w_out, "clicked"):
+            self.w_out.observe(self._on_cell_click, names="clicked")
+        self._show_cell_hint()
 
     # ------------------------------------------------------------------ recipe -> view
 
@@ -879,6 +1005,8 @@ class Explorer:
                 v = v.top(*payload)
             elif kind == "filter":
                 v = v._clone(filters=v.filters + (payload,))
+            elif kind == "cell":
+                v = v._clone(filters=v.filters + tuple(payload[1]))
         if self.refit_sliced or (self.slices and v._layout_stale()):
             v = v.refit()
         if self.mode == CHAINS:
@@ -928,6 +1056,8 @@ class Explorer:
                 lines.append(f"v = v.top({payload[0]!r}, {payload[1]})")
             elif kind == "filter":
                 lines.append(f"# slice: {payload.label}")
+            elif kind == "cell":
+                lines.append(f"v = v.cell({_kw(payload[0])})")
         if self.refit_sliced:
             lines.append("v = v.refit()")
         if self.mode == CHAINS:
@@ -969,6 +1099,8 @@ class Explorer:
         self._render_insights()  # updates the "view changed since last Calculate" banner
         if getattr(self, "_compare_recipe", None):
             self._refresh_compare()  # the comparison is a lens on the view: keep it in step
+        if hasattr(self, "w_cell_row"):
+            self._refresh_cell_pickers()
         self._refresh_log()  # picks up a theme change immediately, not just on the next log line
 
     def _refresh_stats(self) -> None:
@@ -1308,7 +1440,7 @@ class Explorer:
                     f"<div><div style='display:flex;gap:2px'>{heads}</div>"
                     f"<div style='border:1px solid {c['border']};border-radius:0 8px 8px 8px;padding:10px;background:{c['panel']}'>{body}</div></div>"
                 )
-            if name == "HTML":
+            if name in ("HTML", "ClickableHTML"):
                 return f"<div style='color:{c['text']}'>{w.value}</div>"
             desc = _html.escape(str(getattr(w, "description", "") or ""))
             label = f"<label style='color:{c['muted']};margin-right:4px'>{desc}</label>" if desc else ""

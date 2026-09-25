@@ -35,6 +35,8 @@ v.llm_context()                    # description + metadata + a markdown table, 
 v.insights()                       # rich local summary: distributions, mixtures, anomalies, ranked findings — no LLM
 v.compare(action="deny")           # deny vs the rest on one shared layout: diverging heatmap, .top() movers, toggles too
 v.facet("action")                  # small multiples: one panel per value, same layout, one colour scale
+v.rows("22", "deny")               # the raw rows behind a cell, by the labels the table shows
+v.explain("22", "deny")            # why that cell: vs independence, shares, rank, and what sets its rows apart
 p2h.agent.pivot("firewall.csv", rows=["src_ip"], filters=[{"column": "action", "eq": "deny"}])  # plain JSON, for LLM agents
 ```
 
@@ -661,6 +663,60 @@ view, so every later change to the view re-runs it, and the Code tab shows the e
 `v.compare(...)`. For agents, `agent.compare(source, split=, vs=, metric=)` and the MCP
 `compare` tool return both sides' totals, the metric table and the top movers as JSON.
 
+## Interrogate a cell: rows() and explain()
+
+A hot cell raises two questions — *which rows are these?* and *why does it look like
+that?* — and both are answered by the **labels the table shows**, not by raw values, so
+a bin, a time bucket, a folded `(other)`, a `/24` roll-up or a `(null)` is named the same
+way as a plain value:
+
+```python
+v.rows("22", "deny")                   # the rows behind the cell at row label 22, column label deny
+v.rows(dst_port=22, action="deny")     # the same, by column=label (any axis level)
+v.rows("22")                           # a whole row;  v.rows(None, "deny") a whole column
+v.rows(bytes="[1K, 2K)")               # a histogram bin;  timestamp="13:00" a time bucket
+v.rows(dst_port="(other)", n=20)       # the folded top-N remainder, capped
+v.rows(("TCP", "deny"), "3")           # nested rows: a tuple per axis
+v.cell("22", "deny")                   # the same cell as a View (its table is that cell) — toggle it, insights() it
+```
+
+Every active slice applies, a column that isn't on an axis is an ordinary slice
+(`v.rows("22", protocol="TCP")`), and a paged source is scanned page by page.
+
+`explain()` says what a cell is made of and what makes it different:
+
+```python
+e = v.explain("22", "deny")
+e            # notebook: facts, the distinguishing columns, the first rows
+print(e)     # one paragraph:
+# dst_port=22 × action=deny: sum(bytes) = 21,568 · ×3.1 what independence of the axes predicts
+# (6,900) - over · 4% of its row, 11% of its column, 0.4% of the table · rank 9 of 60 cells · 87 of 3,000 rows
+# What sets these rows apart: `bytes` median 163 here vs 678 elsewhere (×0.24); `rule` is
+# 'fw-block-1' for 29% of these rows vs 6% elsewhere (×4.3); ...
+e["distinguishing"][0]   # {"column": "bytes", "kind": "numeric", "median_in_cell": 163, "median_in_rest": 678, "ratio": 0.24, ...}
+```
+
+The facts: the cell's `observed` value; for a count/sum on a 2-D table what
+**independence** of the axes would predict for it (`row_total × col_total /
+grand_total` — the same expectation `anomalies()` ranks by), the ratio and direction;
+its share of its row, its column and the whole table; its rank among all cells; and the
+number of rows behind it. Then **what sets those rows apart** from the rest of the data
+in view: for a label column, the value most over-represented in the cell (its share here
+vs elsewhere, as a lift); for a numeric column, the median here vs elsewhere (as a
+ratio) — scored by "common here *and* distinctive", small differences dropped, the top
+`k`. The columns that name the cell are skipped, since they'd be trivially distinctive.
+Explaining a whole row skips the facts that are true by construction (its expected value
+is its own total). The result is an `Explanation`: a JSON-safe dict that also renders in
+the notebook, so it travels unchanged through the agent surface (`agent.explain`,
+`agent.rows`, and the MCP `explain` / `rows` tools, which name the cell as `{"dst_port":
+"22", "action": "deny"}` using the labels `pivot()` returned).
+
+**In the explorer**, every cell of the heatmap and every bar of the histogram is
+clickable (with `anywidget`; without it the **Inspect** tab's row/column pickers do the
+same): a click lands in **Inspect** with the explanation and the rows; **Drill in**
+slices to that cell and refits, so the next layout is chosen for just those rows — the
+Code tab shows it as `v.cell(...)` and Undo reverses it.
+
 ## Jupyter explorer
 
 ```python
@@ -677,8 +733,10 @@ finer), Chains (state, entity, time, probabilities, plus the most frequent 3-ste
 chains), Style (theme, heat incl. `surprise`, totals, subtotals, outline, bars, compact),
 Code (the Python reproducing the current view), Profile, Data (the survey and plan),
 Stats (the seven costliest steps), **Timeline** (checkpoints, see below), **Insights**
-(the local summary, see above) and **Compare** (A vs B on one layout, small multiples,
-pin-a-baseline — see *Comparing*). A scrolling log of major steps sits under the output. `explorer.snapshot_html()` renders a static
+(the local summary, see above), **Compare** (A vs B on one layout, small multiples,
+pin-a-baseline — see *Comparing*) and **Inspect** (click any cell: what's in it, why,
+and drill in — see *Interrogate a cell*). A scrolling log of major steps sits under the
+output. `explorer.snapshot_html()` renders a static
 picture of the interface for docs or sharing.
 
 **Fields tab**: every column as a draggable chip — kind, semantic type, non-null count
@@ -757,6 +815,8 @@ agent.suggest("events.parquet", 5)                         # ranked layouts, wit
 agent.slicers("events.parquet", columns=["action"])        # values to filter on
 agent.anomalies("events.parquet", rows=["dst_port"], cols=["action"])
 agent.compare("events.parquet", split={"column": "action", "eq": "deny"})   # deny vs the rest: lift per cell, top movers
+agent.explain("events.parquet", cell={"dst_port": "22", "action": "deny"}, rows=["dst_port"], cols=["action"])  # why this cell
+agent.rows("events.parquet", cell={"dst_port": "22", "action": "deny"}, rows=["dst_port"], cols=["action"], n=20)
 ```
 
 Filter objects: `{"column": c, "eq"|"not_eq"|"in"|"range"|"gt"|"gte"|"lt"|"lte"|"regex"|"since"|"on": value}`
@@ -827,7 +887,9 @@ max_cols=, memory_budget_mb=)`, `llm_context(...)` (same arguments as `pivot`, p
 `table_max_rows=`/`table_max_cols=`), `insights(source, rows=, cols=, values=, agg=,
 filters=, sensitivity=, max_findings=, memory_budget_mb=)`, `compare(source, split=, vs=,
 metric=, n=, rows=, cols=, values=, agg=, filters=, ...)` (`split` and `vs` are filter
-objects naming the sides; `vs` omitted = the rest), `suggest(source, n=, filters=)`,
+objects naming the sides; `vs` omitted = the rest), `rows(source, cell=, n=, ...)` and
+`explain(source, cell=, n_rows=, k=, ...)` (`cell` is `{column: label}` in the labels
+`pivot` showed; same layout arguments as `pivot` so they line up), `suggest(source, n=, filters=)`,
 `slicers(source, columns=, top=)`, `anomalies(source, n=, rows=, cols=, filters=)`.
 Works against both `mcp<2` (`FastMCP`) and `mcp>=2` (`MCPServer`) — whichever is
 installed.

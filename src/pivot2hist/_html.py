@@ -10,6 +10,7 @@ a blue accent) — pass ``theme="graphite"`` to any function here, or ``view.sty
 from __future__ import annotations
 
 import html
+import json
 import math
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -339,7 +340,8 @@ def pivot_html(
                 cell = bar + cell
             tip = str(tips[i, j]) if tips is not None else (fmt(raw) if cell_format else fmt_cell(raw))
             out.append(
-                f"<td title='{_esc(tip)}' style='text-align:right;padding:3px 8px;{MONO};white-space:nowrap;"
+                f"<td title='{_esc(tip)}' data-p2h-row='{_esc(json.dumps(list(labels)))}' data-p2h-col='{_esc(json.dumps(list(col_labels[j])))}' "
+                f"style='text-align:right;padding:3px 8px;{MONO};white-space:nowrap;"
                 f"background:{bg};color:{fg};border-left:1px solid {p['cell_border']}'>{cell}</td>"
             )
         if totals:
@@ -567,6 +569,7 @@ def hist_svg(
             tip = f"{' / '.join(bins[i])}" + (f" · {series[j]}" if n_series > 1 else "") + f": {fmt_cell(table.iat[i, j])}"
             out.append(
                 f"<rect x='{x:.1f}' y='{y1:.1f}' width='{max(bar_w, 0.5):.1f}' height='{h:.1f}' fill='{color}' "
+                f"data-p2h-row='{_esc(json.dumps(list(bins[i])))}' data-p2h-col='{_esc(json.dumps(list(_labels(table.columns)[j])))}' "
                 f"opacity='{0.55 if v < 0 else 0.9}' rx='1.5'><title>{_esc(tip)}</title></rect>"
             )
             if show_values and h > 0 and not stacked:

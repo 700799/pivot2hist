@@ -44,7 +44,10 @@ server = _Server(
         "correlated columns, surprising cells) over whatever filters you've applied. Call "
         "compare() when the question is 'how does X differ from Y' (deny vs allow, today vs "
         "yesterday, one host vs the rest): both sides land on one shared layout and it "
-        "returns the cells that moved most. Files are surveyed against available memory "
+        "returns the cells that moved most. When one cell of a table looks interesting, "
+        "explain() says what's in it (vs what independence would predict, its shares, and "
+        "what sets its rows apart) and rows() returns the raw rows behind it - name the "
+        "cell by the labels pivot() showed. Files are surveyed against available memory "
         "and streamed page by page when too large to hold in memory, so any source can be "
         "passed directly by path."
     ),
@@ -186,6 +189,71 @@ def compare(
     return _agent.compare(
         source, split=split, vs=vs, metric=metric, n=n, rows=rows, cols=cols, values=values, agg=agg,
         filters=filters, max_rows=max_rows, max_cols=max_cols, memory_budget_mb=memory_budget_mb,
+    )
+
+
+@server.tool()
+def rows(
+    source: str,
+    cell: Dict[str, Any],
+    n: int = 50,
+    rows: Optional[List[str]] = None,
+    cols: Optional[List[str]] = None,
+    values: Optional[str] = None,
+    agg: Optional[str] = None,
+    filters: Optional[List[Dict[str, Any]]] = None,
+    mode: str = "pivot",
+    on: Optional[str] = None,
+    by: Optional[str] = None,
+    bins: Optional[str] = None,
+    max_rows: int = 40,
+    max_cols: int = 12,
+    memory_budget_mb: Optional[float] = None,
+) -> Dict[str, Any]:
+    """The raw rows behind one cell of a pivot() table (or one bar of its histogram), with
+    every filter applied - call this when a cell looks interesting. `cell` is
+    {column: label} for the axis columns, using the labels pivot() showed: a plain value,
+    a bin like "[1K, 2K)", a time bucket like "13:00", "(other)", "(null)", a roll-up like
+    "10.0.1.0/24". One axis alone gives a whole row or column. Pass the same
+    rows/cols/values/agg/filters you passed to pivot() so the labels line up. Returns
+    n_returned (capped at n), n_total, and the rows as records."""
+    return _agent.rows(
+        source, cell=cell, n=n, rows=rows, cols=cols, values=values, agg=agg, filters=filters, mode=mode, on=on, by=by,
+        bins=bins, max_rows=max_rows, max_cols=max_cols, memory_budget_mb=memory_budget_mb,
+    )
+
+
+@server.tool()
+def explain(
+    source: str,
+    cell: Dict[str, Any],
+    n_rows: int = 10,
+    k: int = 5,
+    rows: Optional[List[str]] = None,
+    cols: Optional[List[str]] = None,
+    values: Optional[str] = None,
+    agg: Optional[str] = None,
+    filters: Optional[List[Dict[str, Any]]] = None,
+    mode: str = "pivot",
+    on: Optional[str] = None,
+    by: Optional[str] = None,
+    bins: Optional[str] = None,
+    max_rows: int = 40,
+    max_cols: int = 12,
+    memory_budget_mb: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Why does this cell look the way it does? `cell` names it as in rows(). Returns the
+    observed value; for a count/sum on a 2-D table the value independence of the axes
+    would predict, the ratio to it and the direction (over/under); the cell's share of
+    its row, column and the whole table; its rank among all cells; how many rows it holds;
+    `distinguishing` - the k columns that most set those rows apart from the rest of the
+    data (a label over-represented here, with its share here vs elsewhere and a lift; a
+    numeric whose median differs, as a ratio), each with a ready-made sentence; the first
+    n_rows rows; and a one-paragraph `text` you can quote. Deterministic and local - no
+    model call - so it's cheap to run on every cell you wonder about."""
+    return _agent.explain(
+        source, cell=cell, n_rows=n_rows, k=k, rows=rows, cols=cols, values=values, agg=agg, filters=filters, mode=mode,
+        on=on, by=by, bins=bins, max_rows=max_rows, max_cols=max_cols, memory_budget_mb=memory_budget_mb,
     )
 
 

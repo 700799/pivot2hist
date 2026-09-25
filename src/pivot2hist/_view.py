@@ -1255,6 +1255,54 @@ class View:
 
         return _facet(self, column, n, levels=levels)
 
+    # ------------------------------------------------------------------ interrogating a cell
+
+    def cell(self, *args: Any, **labels: Any) -> "View":
+        """This view narrowed to one cell (or one row / one column) of its table, named by
+        *label* - what the table shows - rather than by raw value::
+
+            v.cell("22", "deny")                 # row label, column label (tuples for nested levels)
+            v.cell(dst_port=22, action="deny")   # column=label; a label of any axis level
+            v.cell(bytes="[1K, 2K)")             # a bin of a histogram / binned axis
+            v.cell(timestamp="13:00")            # a time bucket, as labelled
+            v.cell(dst_port="(other)")           # the folded top-N remainder; "(null)" for nulls
+            v.cell(src_ip="10.0.1.0/24")         # a semantic roll-up level
+
+        Labels are matched by materializing each dimension exactly as the pivot did, so
+        every kind of level works the same way. ``None`` for an axis (or a level) leaves
+        it open, giving a whole row or column. A ``column=value`` for a column that is
+        *not* on an axis is an ordinary :meth:`slice`. The layout is kept (no refit): the
+        result's table is that cell; ``.data`` is the rows behind it (see :meth:`rows`).
+        """
+        from ._explain import cell_view
+
+        return cell_view(self, args, labels)[0]
+
+    def rows(self, *args: Any, n: Optional[int] = None, **labels: Any) -> pd.DataFrame:
+        """The raw rows behind a cell (same forms as :meth:`cell`), with every active
+        slice applied; ``n`` caps them. A paged source is scanned page by page for them.
+        """
+        from ._explain import rows as _rows
+
+        return _rows(self, args, n, labels)
+
+    def explain(self, *args: Any, n_rows: int = 10, k: int = 5, **labels: Any) -> Any:
+        """Why does this cell look the way it does? (Same forms as :meth:`cell`.)
+
+        Returns an :class:`Explanation` - a JSON-safe dict that reads well in a notebook -
+        with the cell's ``observed`` value; for an additive measure on a 2-D table its
+        ``expected`` value under independence of the axes, the ``ratio_to_expected`` and
+        ``direction`` (the same residual :meth:`anomalies` ranks by); its shares of its row,
+        column and the whole table; its ``rank`` among all cells; how many rows it holds;
+        ``distinguishing`` - the ``k`` columns that most set those rows apart from the rest
+        of the data in view (a label over-represented here, as its share here vs elsewhere;
+        a numeric whose median differs, as a ratio); the first ``n_rows`` rows; and a
+        one-paragraph ``text`` saying all of that. Nothing here calls a model.
+        """
+        from ._explain import explain as _explain
+
+        return _explain(self, args, labels, n_rows=n_rows, k=k)
+
     def explore(self, **kw: Any) -> Any:
         """Open the interactive Jupyter explorer (needs ``ipywidgets``)."""
         from .ui import explore

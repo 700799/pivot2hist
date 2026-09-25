@@ -40,8 +40,9 @@ from ._semantic import HIERARCHY, infer_semantic
 from ._survey import Machine, PagedSource, Plan, Survey, downcast, load_planned, survey
 from ._view import HIST, PIVOT, Derived, Filter, View
 from ._compare import ADDITIVE, METRICS, METRIC_HELP, Comparison, Facets
+from ._explain import Explanation
 
-__version__ = "0.14.0"
+__version__ = "0.15.0"
 
 _PLANNED_KEYS = ("memory_budget_mb", "mode", "columns", "query", "table", "sample_rows", "page_rows")
 
@@ -375,6 +376,7 @@ def dependencies(data: Any, columns: Optional[Sequence[str]] = None, *, bins: in
 __all__ = [
     "fit", "pivot", "histogram", "profile", "load", "suggest", "explore", "cluster", "chains", "regimes", "dependencies",
     "llm_context", "insights", "compare", "facet", "Comparison", "Facets", "METRICS", "METRIC_HELP", "ADDITIVE",
+    "Explanation",
     "survey", "load_planned", "downcast", "stats", "verbose", "log", "distribution",
     "sequences", "transitions", "transition_matrix", "steady_state",
     "View", "Layout", "Dim", "FitOptions", "Filter", "Derived", "Profile", "ColumnProfile",

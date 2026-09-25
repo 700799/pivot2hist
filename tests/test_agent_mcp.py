@@ -128,7 +128,7 @@ def test_mcp_tools_registered(mcp_server_module):
 
     tools = asyncio.run(mcp_server_module.server.list_tools())
     names = {t.name for t in tools}
-    assert names == {"describe", "pivot", "llm_context", "insights", "compare", "suggest", "slicers", "anomalies"}
+    assert names == {"describe", "pivot", "llm_context", "insights", "compare", "rows", "explain", "suggest", "slicers", "anomalies"}
     for t in tools:
         assert t.description and len(t.description) > 10
 
@@ -307,3 +307,41 @@ def test_mcp_compare_tool(mcp_server_module, tmp_path, fw):
     r = asyncio.run(run())
     d = json.loads(r.content[0].text)
     assert d["metric"] == "lift" and len(d["top"]) == 2 and d["a"]["name"] == "action=deny"
+
+
+def test_agent_rows_and_explain(fw):
+    r = agent.rows(fw, cell={"dst_port": "22", "action": "deny"}, rows=["dst_port"], cols=["action"], n=5)
+    _assert_json_safe(r)
+    want = ((fw["dst_port"] == 22) & (fw["action"] == "deny")).sum()
+    assert r["n_returned"] == 5 and r["n_total"] == want and len(r["rows"]) == 5 and r["cell"] == {"dst_port": "22", "action": "deny"}
+    e = agent.explain(fw, cell={"dst_port": "22", "action": "deny"}, rows=["dst_port"], cols=["action"], n_rows=2)
+    _assert_json_safe(e)
+    assert e["n_rows"] == want and e["expected"] is not None and len(e["rows"]) == 2 and e["text"]
+    filtered = agent.explain(fw, cell={"dst_port": "22"}, rows=["dst_port"], cols=["action"], filters=[{"column": "protocol", "eq": "TCP"}])
+    assert filtered["rows_total"] == (fw["protocol"] == "TCP").sum()
+    h = agent.rows(fw, cell={"bytes": "(null)"}, mode="hist", on="bytes")
+    assert h["n_total"] == 0
+    with pytest.raises(KeyError):
+        agent.explain(fw, cell={"dst_port": "nope"}, rows=["dst_port"], cols=["action"])
+
+
+def test_mcp_rows_and_explain_tools(mcp_server_module, tmp_path, fw):
+    import asyncio
+
+    path = tmp_path / "fw.csv"
+    fw.to_csv(path, index=False)
+
+    async def run():
+        a = await mcp_server_module.server.call_tool(
+            "explain", {"source": str(path), "cell": {"dst_port": "22", "action": "deny"}, "rows": ["dst_port"], "cols": ["action"], "n_rows": 1}
+        )
+        b = await mcp_server_module.server.call_tool(
+            "rows", {"source": str(path), "cell": {"dst_port": "22"}, "rows": ["dst_port"], "cols": ["action"], "n": 3}
+        )
+        return a, b
+
+    a, b = asyncio.run(run())
+    e = json.loads(a.content[0].text)
+    r = json.loads(b.content[0].text)
+    assert e["cell"] == {"dst_port": "22", "action": "deny"} and e["observed"] > 0 and len(e["rows"]) == 1
+    assert r["n_returned"] == 3 and r["n_total"] == (fw["dst_port"] == 22).sum()

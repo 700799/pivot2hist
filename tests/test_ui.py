@@ -482,3 +482,59 @@ def test_compare_metric_falls_back_for_non_additive_measures(ex):
     ex.w_cmp_val.value = "TCP"
     assert ex.comparison.metric == "delta" and ex.w_cmp_metric.value == "delta"
     assert "needs a count/sum" in ex.w_cmp_status.value
+
+
+# --------------------------------------------------------------------------- inspect tab
+
+
+def test_inspect_tab_present_and_pickers_follow_the_table(ex):
+    assert ex.tabs.get_title(ex.INSPECT_TAB) == "Inspect" and "click a cell" in ex.w_cell_out.value
+    rows = [v for _, v in ex.w_cell_row.options if v is not None]
+    cols = [v for _, v in ex.w_cell_col.options if v is not None]
+    assert rows == [(str(x),) for x in ex.view.pivot().index] and cols == [(str(x),) for x in ex.view.pivot().columns]
+    ex.w_rows.value = ("country",)
+    assert [v for _, v in ex.w_cell_row.options if v is not None] == [(str(x),) for x in ex.view.pivot().index]
+    one_d = explore(p2h.fit(ex.view.source, rows=["action"], cols=[], agg="count"))
+    try:
+        assert one_d.w_cell_col.options == (("(any column)", None),)
+        assert [v for _, v in one_d.w_cell_row.options if v is not None] == [(str(x),) for x in one_d.view.pivot().index]
+        if hasattr(one_d.w_out, "clicked"):
+            one_d.w_out.clicked = {"row": ["deny"], "col": ["count"], "n": 1}
+            assert one_d.cell["cell"] == {"action": "deny"}  # the only column is the measure, not a level
+    finally:
+        one_d.close()
+
+
+def test_inspect_explain_rows_via_pickers_and_errors(ex, fw):
+    from pivot2hist import Explanation
+
+    ex.w_cell_explain.click()
+    assert "pick a row" in ex.w_cell_out.value
+    ex.w_cell_row.value = ("22",)
+    ex.w_cell_col.value = ("3",)
+    ex.w_cell_explain.click()
+    assert isinstance(ex.cell, Explanation) and ex.cell["cell"] == {"dst_port": "22", "severity": "3"}
+    assert "what sets these rows apart" in ex.w_cell_out.value
+    assert len(ex.rows()) == ((fw["dst_port"] == 22) & (fw["severity"] == 3)).sum()
+    e = ex.explain("445", "5", n_rows=2)
+    assert e["cell"] == {"dst_port": "445", "severity": "5"} and len(e["rows"]) == 2
+
+
+def test_inspect_click_path_and_drill_in(ex):
+    if not hasattr(ex.w_out, "clicked"):
+        pytest.skip("anywidget not installed")
+    ex.w_out.clicked = {"row": ["445"], "col": ["5"], "n": 1}
+    assert ex.cell["cell"] == {"dst_port": "445", "severity": "5"} and ex.tabs.selected_index == ex.INSPECT_TAB
+    assert ex.w_cell_row.value == ("445",) and ex.w_cell_col.value == ("5",)
+    before, n_before = ex.view.layout.describe(), len(ex.view.data)
+    ex.w_cell_drill.click()
+    assert ex.view.slices[-2:] == ["dst_port=445", "severity=5"] and len(ex.view.data) < n_before
+    assert "dst_port" not in {d.column for d in ex.view.layout.dims} and ex.view.layout.describe() != before
+    assert "v = v.cell(dst_port='445', severity='5')" in ex.code() and "v.refit()" in ex.code()
+    ex.w_undo.click()
+    assert ex.view.layout.describe() == before and len(ex.view.data) == n_before
+    ex.w_mode.value = "hist"
+    lab = ex.w_cell_row.options[2][1]
+    ex.w_out.clicked = {"row": list(lab), "col": ["count"], "n": 2}
+    assert ex.cell["cell"] == {"dst_port": lab[0]} and ex.cell["mode"] == "hist"
+    ex.w_mode.value = "pivot"
