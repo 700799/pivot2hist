@@ -155,6 +155,11 @@ def load(source: Source, *, parse_dates: bool = True, infer_types: bool = True, 
     (and epoch integers in time-named columns) is parsed. Nothing is copied unless a
     column actually changes.
     """
+    if source is None or isinstance(source, (bool, int, float, complex, bytes)):
+        raise TypeError(
+            f"can't load {source!r} ({type(source).__name__}) as tabular data; pass a DataFrame/Series, a file "
+            "path, a list of dicts, a dict of lists, or a 2-D numpy array"
+        )
     if isinstance(source, pd.DataFrame):
         df = source
     elif isinstance(source, pd.Series):

@@ -124,6 +124,10 @@ class FitOptions:
     engine: str = "pandas"
     objective: str = "heuristic"
 
+    def __post_init__(self) -> None:
+        if self.sample < 1:
+            raise ValueError(f"sample must be >= 1 (need at least one row to score candidates), got {self.sample}")
+
     @property
     def target_aspect(self) -> float:
         if self.aspect and self.aspect > 0:

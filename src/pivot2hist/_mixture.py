@@ -92,6 +92,8 @@ def fit_gmm(X, k: int, *, seed: int = 0, iters: int = 100, tol: float = 1e-5, n_
     if X.shape[0] == 1 and X.shape[1] != 1:
         X = X.T
     n, d = X.shape
+    if n < 1:
+        raise ValueError(f"need at least 1 data point to fit a mixture, got {n}")
     k = max(1, min(int(k), n))
     from ._cluster import _kmeans_pp_init
 

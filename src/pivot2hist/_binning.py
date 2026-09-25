@@ -513,6 +513,22 @@ def _natural_sort_key(values: List) -> List:
         return sorted(values, key=lambda x: (str(type(x)), str(x)))
 
 
+def _hashable_column(s: pd.Series) -> pd.Series:
+    """``s``, or a str-cast copy if it holds unhashable values (lists, dicts, sets ...).
+
+    ``value_counts``/``isin`` tolerate those, but building the final ``Categorical``
+    needs a hashable index either way, so :func:`categorize` converts up front rather
+    than failing deep inside pandas with an opaque ``TypeError: unhashable type``.
+    """
+    if s.dtype != object:
+        return s
+    try:
+        pd.unique(s.dropna().to_numpy(dtype=object))
+        return s
+    except TypeError:
+        return s.astype(str)
+
+
 def categorize(
     s: pd.Series,
     *,
@@ -533,6 +549,7 @@ def categorize(
         s = s.astype(object)
     if pdt.is_bool_dtype(s):
         s = s.astype(object)
+    s = _hashable_column(s)
     valid = s.notna()
     vals = s[valid]
     try:
