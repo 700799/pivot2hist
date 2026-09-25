@@ -411,3 +411,74 @@ def test_insights_reflects_current_slice_in_explorer(ex, fw):
     ex.w_slicers["action"][1].value = ("deny",)
     report = ex.calculate()
     assert report["shape"]["rows"] == (fw["action"] == "deny").sum()
+
+
+# --------------------------------------------------------------------------- compare tab
+
+
+def test_compare_tab_present_and_idle(ex):
+    assert ex.tabs.get_title(ex.COMPARE_TAB) == "Compare"
+    assert ex.comparison is None and "pick a column" in ex.w_cmp_out.value
+
+
+def test_compare_tab_facet_then_split_then_metric(ex):
+    from pivot2hist import Comparison, Facets
+
+    ex.w_cmp_col.value = "action"
+    assert isinstance(ex.comparison, Facets) and ex.w_cmp_out.value.count("action = ") == 3
+    assert ex.w_cmp_val.options[1][1] == "allow"
+    ex.w_cmp_val.value = "deny"
+    assert isinstance(ex.comparison, Comparison) and ex.comparison.names == ("action=deny", "rest")
+    assert ex.comparison.metric == "lift" and "c = v.compare(action='deny')" in ex.code()
+    ex.w_cmp_metric.value = "delta"
+    assert ex.comparison.metric == "delta" and "metric='delta'" in ex.code()
+    before = len(ex.w_cmp_out.value)
+    ex.w_cmp_side.value = True
+    assert len(ex.w_cmp_out.value) > before
+
+
+def test_compare_tab_query_form_and_clear(ex, fw):
+    ex.w_cmp_query.value = "bytes > 5000"
+    assert ex.comparison.names == ("bytes > 5000", "rest") and len(ex.comparison.a.data) == (fw["bytes"] > 5000).sum()
+    assert "c = v.compare('bytes > 5000')" in ex.code()
+    ex.w_cmp_clear.click()
+    assert ex.comparison is None and ex.w_cmp_query.value == "" and "c = v.compare" not in ex.code()
+
+
+def test_compare_stays_in_step_with_the_view(ex, fw):
+    ex.w_cmp_col.value = "action"
+    ex.w_cmp_val.value = "deny"
+    ex.w_slicers["protocol"][1].value = ("TCP",)
+    assert "protocol" in ex.comparison.title() and len(ex.comparison.a.data) == ((fw["action"] == "deny") & (fw["protocol"] == "TCP")).sum()
+
+
+def test_compare_pin_baseline_flow(ex, fw):
+    assert ex.compare_with_baseline() is None and "pin a baseline" in ex.w_cmp_status.value
+    base = ex.pin()
+    assert base is ex.view and "baseline:" in ex.w_cmp_status.value
+    ex.w_slicers["action"][1].value = ("deny",)
+    c = ex.compare_with_baseline()
+    assert c.names == ("current", "baseline") and len(c.b.data) == len(fw) and len(c.a.data) == (fw["action"] == "deny").sum()
+    assert c.b.layout == c.a.layout and [d.column for d in c.layout.dims] == [d.column for d in base.layout.dims]
+    assert "v.compare(baseline" in ex.code()
+
+
+def test_compare_programmatic(ex):
+    c = ex.compare("action", "deny", "drop", metric="ratio")
+    assert c.names == ("action=deny", "action=drop") and c.metric == "ratio" and ex.w_cmp_metric.value == "ratio"
+    assert "c = v.compare('action', 'deny', 'drop', metric='ratio')" in ex.code()
+    f = ex.facet("protocol", 2)
+    assert f.labels == ["TCP", "UDP"] and "f = v.facet('protocol', 2)" in ex.code()
+    with pytest.raises(ValueError):
+        ex.compare(action="deny", metric="nope")
+    with pytest.raises(ValueError):
+        ex.compare(nope="x")
+
+
+def test_compare_metric_falls_back_for_non_additive_measures(ex):
+    ex.w_values.value = "bytes"
+    ex.w_agg.value = "mean"
+    ex.w_cmp_col.value = "protocol"
+    ex.w_cmp_val.value = "TCP"
+    assert ex.comparison.metric == "delta" and ex.w_cmp_metric.value == "delta"
+    assert "needs a count/sum" in ex.w_cmp_status.value

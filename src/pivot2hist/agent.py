@@ -22,7 +22,7 @@ the same way as in a notebook: a call never has to load more than the memory bud
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, List, Optional, Sequence, Union
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 Filter = Dict[str, Any]
 Source = Union[str, os.PathLike, List[Dict[str, Any]], Dict[str, List[Any]], Any]
@@ -33,6 +33,41 @@ FILTER_OPS = ("eq", "not_eq", "in", "range", "gt", "gte", "lt", "lte", "regex", 
 
 def _is_path_like(source: Any) -> bool:
     return isinstance(source, (str, os.PathLike)) or type(source).__name__ == "DuckDBPyConnection"
+
+
+def _filter_spec(f: Filter) -> Tuple[str, Any]:
+    """One JSON filter dict as ``("query", expr)``, ``("slice", {col: spec})`` or
+    ``("exclude", {col: spec})`` in :meth:`View.slice`'s own grammar."""
+    if not isinstance(f, dict):
+        raise ValueError(f"each filter must be an object, got {f!r}")
+    if "query" in f:
+        return "query", f["query"]
+    col = f.get("column")
+    if col is None:
+        raise ValueError(f"filter needs 'column' (or 'query'): {f!r}")
+    ops = [k for k in f if k != "column"]
+    if len(ops) != 1:
+        raise ValueError(f"filter on {col!r} needs exactly one of {FILTER_OPS}, got {ops or 'none'}: {f!r}")
+    op = ops[0]
+    val = f[op]
+    if op == "eq":
+        return "slice", {col: val}
+    if op == "not_eq":
+        return "exclude", {col: val}
+    if op == "in":
+        return "slice", {col: list(val)}
+    if op == "range":
+        lo, hi = val
+        return "slice", {col: (lo, hi)}
+    if op in ("gt", "gte", "lt", "lte"):
+        return "slice", {col: f"{ {'gt': '>', 'gte': '>=', 'lt': '<', 'lte': '<='}[op] } {val}"}
+    if op == "regex":
+        return "slice", {col: "~" + str(val)}
+    if op == "since":
+        return "slice", {col: f"last {val}"}
+    if op == "on":
+        return "slice", {col: val}
+    raise ValueError(f"unknown filter op {op!r} on {col!r}; use one of {FILTER_OPS}")
 
 
 def _apply_filters(v: Any, filters: Optional[Sequence[Filter]]) -> Any:
@@ -47,45 +82,23 @@ def _apply_filters(v: Any, filters: Optional[Sequence[Filter]]) -> Any:
     if not filters:
         return v
     for f in filters:
-        if not isinstance(f, dict):
-            raise ValueError(f"each filter must be an object, got {f!r}")
-        if "query" in f:
-            v = v.slice(f["query"])
-            continue
-        col = f.get("column")
-        if col is None:
-            raise ValueError(f"filter needs 'column' (or 'query'): {f!r}")
-        ops = [k for k in f if k != "column"]
-        if len(ops) != 1:
-            raise ValueError(f"filter on {col!r} needs exactly one of {FILTER_OPS}, got {ops or 'none'}: {f!r}")
-        op = ops[0]
-        val = f[op]
-        if op == "eq":
-            v = v.slice(**{col: val})
-        elif op == "not_eq":
-            v = v.exclude(**{col: val})
-        elif op == "in":
-            v = v.slice(**{col: list(val)})
-        elif op == "range":
-            lo, hi = val
-            v = v.slice(**{col: (lo, hi)})
-        elif op == "gt":
-            v = v.slice(**{col: f"> {val}"})
-        elif op == "gte":
-            v = v.slice(**{col: f">= {val}"})
-        elif op == "lt":
-            v = v.slice(**{col: f"< {val}"})
-        elif op == "lte":
-            v = v.slice(**{col: f"<= {val}"})
-        elif op == "regex":
-            v = v.slice(**{col: "~" + str(val)})
-        elif op == "since":
-            v = v.slice(**{col: f"last {val}"})
-        elif op == "on":
-            v = v.slice(**{col: val})
+        kind, spec = _filter_spec(f)
+        if kind == "query":
+            v = v.slice(spec)
+        elif kind == "slice":
+            v = v.slice(**spec)
         else:
-            raise ValueError(f"unknown filter op {op!r} on {col!r}; use one of {FILTER_OPS}")
+            v = v.exclude(**spec)
     return v
+
+
+def _side_spec(f: Filter) -> Union[str, Dict[str, Any]]:
+    """A filter dict as one side of a comparison: a query string or a ``{col: spec}``."""
+    kind, spec = _filter_spec(f)
+    if kind in ("query", "slice"):
+        return spec
+    (col, val), = spec.items()
+    return f"`{col}` != {val!r}"
 
 
 def describe(
@@ -328,6 +341,73 @@ def insights(
     return v.insights(sensitivity=sensitivity, max_findings=max_findings, max_pairs=max_pairs)
 
 
+def compare(
+    source: Source,
+    *,
+    split: Filter,
+    vs: Optional[Filter] = None,
+    metric: Optional[str] = None,
+    n: int = 10,
+    rows: Optional[Sequence[str]] = None,
+    cols: Optional[Sequence[str]] = None,
+    values: Optional[str] = None,
+    agg: Optional[str] = None,
+    filters: Optional[Sequence[Filter]] = None,
+    max_rows: int = 40,
+    max_cols: int = 12,
+    layers: int = 2,
+    aspect: Optional[float] = None,
+    memory_budget_mb: Optional[float] = None,
+    columns: Optional[Sequence[str]] = None,
+    **opts: Any,
+) -> Dict[str, Any]:
+    """Compare two sides of the data cell by cell on one shared pivot layout.
+
+    ``split`` is one filter object (same forms as ``filters``: ``{"column": "action",
+    "eq": "deny"}``, ``{"column": "bytes", "gt": 1000}``, ``{"query": "..."}``) naming
+    side A; side B is everything else, or ``vs`` (a second filter object) - e.g. ``split =
+    {"column": "timestamp", "on": "2026-03-02"}``, ``vs = {"column": "timestamp", "on":
+    "2026-03-01"}`` for today against yesterday. ``filters`` apply to both sides first.
+    The layout is auto-fitted once (or fixed via ``rows``/``cols``/``values``/``agg``) and
+    then *frozen* for both sides - same dimensions, bins and top-N labels - so every cell
+    means the same thing on each side; if the split column sits on an axis it is taken off
+    it and that axis refilled.
+
+    ``metric``: ``"lift"`` (default for an additive measure: A's share of its own total
+    over B's share, so a small slice compares fairly against a large one; >1 means
+    over-represented in A), ``"delta"`` (A - B; default otherwise), ``"ratio"``,
+    ``"pct_change"``, ``"share_delta"`` (percentage points), or ``"a"``/``"b"``/
+    ``"share_a"``/``"share_b"``.
+
+    Returns ``description``, ``metric`` and ``metric_meaning``, ``a``/``b`` (name, rows,
+    slices, total), ``layout``, ``shape``, ``table`` (the metric per cell, as records) and
+    ``top`` - the ``n`` cells that differ most, each with both raw values, ``delta``,
+    ``ratio``, ``lift`` and ``only_in`` (set when the other side has nothing there).
+    """
+    from . import fit as _fit
+
+    v = _fit(
+        source,
+        rows=list(rows) if rows is not None else None,
+        cols=list(cols) if cols is not None else None,
+        values=values,
+        agg=agg,
+        max_rows=max_rows,
+        max_cols=max_cols,
+        layers=layers,
+        aspect=aspect,
+        memory_budget_mb=memory_budget_mb,
+        columns=columns,
+        **opts,
+    )
+    v = _apply_filters(v, filters)
+    sa = _side_spec(split)
+    c = v.compare(sa) if vs is None else v.compare(sa, _side_spec(vs))
+    if metric is not None:
+        c = c.with_metric(metric)
+    return c.to_dict(n)
+
+
 def suggest(
     source: Source,
     n: int = 5,
@@ -419,4 +499,4 @@ def slicers(
     return {col: [{"value": val, "count": int(c)} for val, c in vals] for col, vals in raw.items()}
 
 
-__all__ = ["describe", "pivot", "llm_context", "insights", "suggest", "slicers", "anomalies", "FILTER_OPS"]
+__all__ = ["describe", "pivot", "llm_context", "insights", "compare", "suggest", "slicers", "anomalies", "FILTER_OPS"]

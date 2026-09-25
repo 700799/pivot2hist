@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import html
 import math
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -202,6 +202,11 @@ def pivot_html(
     outline: bool = False,
     agg: str = "sum",
     theme: str = "light",
+    heat_values: Optional[np.ndarray] = None,
+    heat_vmax: Optional[float] = None,
+    cell_format: Optional[Callable[[Any], str]] = None,
+    tooltips: Optional[np.ndarray] = None,
+    note: Optional[str] = None,
 ) -> str:
     """Pivot table as an HTML heatmap. Cells carry the exact value as a tooltip.
 
@@ -216,17 +221,37 @@ def pivot_html(
     each group as a collapsible block whose header carries the subtotal, so rows within
     rows can be folded and unfolded in the notebook without any JavaScript. ``theme`` is
     ``"light"`` (default) or ``"graphite"`` (dark).
+
+    ``heat_values`` (same shape as ``table``) colours cells by *those* numbers instead of
+    the displayed ones - signed, so negatives get the red ramp and positives the blue one,
+    a diverging scale for a table of differences or log-ratios - scaled to ``heat_vmax``
+    when given (so several tables can share one scale) or to their own peak. ``cell_format``
+    replaces the number formatting of the visible text; ``tooltips`` (an object array of
+    strings, same shape) replaces the per-cell hover text; ``note`` is a small footnote
+    under the table.
     """
     p = _pal(theme)
     if table.empty:
         return _wrap(title, f"<div style='color:{p['empty_text']};padding:8px'>(empty)</div>", theme=theme)
-    if outline and table.index.nlevels > 1:
+    if outline and table.index.nlevels > 1 and heat_values is None:
         return _wrap(title, _outline_html(table, heat=heat, compact=compact, agg=agg, totals=totals, theme=theme), theme=theme)
     t = table
     if max_rows is not None and len(t) > max_rows:
         t = t.head(max_rows)
     values = t.to_numpy(dtype=float)
-    shade, neg = _heat_fields(values, heat) if heat != "none" else (np.zeros_like(values), values < 0)
+    colorable = np.isfinite(values)
+    if heat == "none":
+        shade, neg = np.zeros_like(values), values < 0
+    elif heat_values is not None:
+        hv = np.asarray(heat_values, dtype=float)[: len(t)]
+        colorable = np.isfinite(hv)
+        peak = float(heat_vmax) if heat_vmax is not None else (float(np.abs(hv[colorable]).max()) if colorable.any() else 0.0)
+        shade = np.clip(np.where(colorable, np.abs(hv) / peak, 0.0), 0.0, 1.0) if peak > 0 else np.zeros_like(values)
+        neg = np.where(colorable, hv < 0, False)
+    else:
+        shade, neg = _heat_fields(values, heat)
+    tips = np.asarray(tooltips, dtype=object)[: len(t)] if tooltips is not None else None
+    fmt = cell_format or (lambda raw: fmt_cell(raw, compact=compact))
     row_labels = _labels(t.index)
     col_labels = _labels(t.columns)
     n_row_levels = t.index.nlevels
@@ -300,9 +325,9 @@ def pivot_html(
         for j in range(values.shape[1]):
             v = values[i, j]
             raw = t.iat[i, j]
-            text = fmt_cell(raw, compact=compact)
+            text = fmt(raw)
             sh = float(shade[i, j])
-            bg = heat_color(sh, negative=bool(neg[i, j]), theme=theme) if heat != "none" and np.isfinite(v) else p["cell_bg"]
+            bg = heat_color(sh, negative=bool(neg[i, j]), theme=theme) if heat != "none" and colorable[i, j] else p["cell_bg"]
             fg = _text_color(sh, theme=theme) if heat != "none" else p["cell_text"]
             cell = _esc(text)
             if bars and vmax_bar > 0 and np.isfinite(v):
@@ -312,8 +337,9 @@ def pivot_html(
                     f"<span style='display:block;width:{pct:.1f}%;height:8px;background:{p['palette'][0]};border-radius:2px'></span></span>"
                 )
                 cell = bar + cell
+            tip = str(tips[i, j]) if tips is not None else (fmt(raw) if cell_format else fmt_cell(raw))
             out.append(
-                f"<td title='{_esc(fmt_cell(raw))}' style='text-align:right;padding:3px 8px;{MONO};white-space:nowrap;"
+                f"<td title='{_esc(tip)}' style='text-align:right;padding:3px 8px;{MONO};white-space:nowrap;"
                 f"background:{bg};color:{fg};border-left:1px solid {p['cell_border']}'>{cell}</td>"
             )
         if totals:
@@ -333,6 +359,8 @@ def pivot_html(
     out.append("</table>")
     if len(t) < len(table):
         out.append(f"<div style='color:{p['empty_text']};font-size:11px;padding:4px 2px'>... {len(table) - len(t):,} more rows</div>")
+    if note:
+        out.append(f"<div style='{FONT};color:{p['empty_text']};font-size:11px;padding:4px 2px'>{_esc(note)}</div>")
     return _wrap(title, "".join(out), theme=theme)
 
 
@@ -423,6 +451,16 @@ def _wrap(title: Optional[str], body: str, *, theme: str = "light") -> str:
     return f"<div class='pivot2hist' data-p2h-theme='{theme}' style='display:inline-block;max-width:100%;overflow-x:auto{outer}'>{head}{body}</div>"
 
 
+def grid_html(panels: List[str], *, title: Optional[str] = None, note: Optional[str] = None, theme: str = "light") -> str:
+    """Several rendered panels (each from :func:`pivot_html` / :func:`hist_svg`) laid out
+    side by side, wrapping onto further rows as the notebook's width allows."""
+    p = _pal(theme)
+    body = "<div style='display:flex;flex-wrap:wrap;gap:12px;align-items:flex-start'>" + "".join(f"<div>{x}</div>" for x in panels) + "</div>"
+    if note:
+        body += f"<div style='{FONT};color:{p['empty_text']};font-size:11px;padding:4px 2px'>{_esc(note)}</div>"
+    return _wrap(title, body, theme=theme)
+
+
 def _ticks(vmax: float, n: int = 5) -> List[float]:
     if not (vmax > 0):
         return [0.0]
@@ -444,6 +482,7 @@ def hist_svg(
     log_y: bool = False,
     show_values: Optional[bool] = None,
     theme: str = "light",
+    vmax: Optional[float] = None,
 ) -> str:
     """Histogram / bar chart as inline SVG.
 
@@ -451,7 +490,8 @@ def hist_svg(
     columns are the series (one colour each, side by side or stacked), and every bar
     carries a tooltip. ``density`` is an optional ``(x, y)`` curve drawn over a numeric
     axis, e.g. from :func:`pivot2hist.bin_edges`'s sibling :func:`kde`. ``theme`` is
-    ``"light"`` (default) or ``"graphite"`` (dark).
+    ``"light"`` (default) or ``"graphite"`` (dark). ``vmax`` fixes the top of the y axis
+    (default: the tallest bar), so several charts can share one scale.
     """
     p = _pal(theme)
     if table.empty:
@@ -473,7 +513,9 @@ def hist_svg(
     plot_w = max(60, width - left - right)
     plot_h = max(60, height - top - bottom)
 
-    if stacked and n_series > 1:
+    if vmax is not None:
+        vmax = float(vmax)
+    elif stacked and n_series > 1:
         tops = values.clip(min=0).sum(axis=1)
         vmax = float(tops.max()) if tops.size else 0.0
     else:
@@ -583,4 +625,4 @@ def hist_svg(
     return _wrap(None, "".join(out), theme=theme)
 
 
-__all__ = ["pivot_html", "hist_svg", "heat_color", "PALETTE", "PALETTE_GRAPHITE", "PALETTES", "THEMES"]
+__all__ = ["pivot_html", "hist_svg", "grid_html", "heat_color", "PALETTE", "PALETTE_GRAPHITE", "PALETTES", "THEMES"]

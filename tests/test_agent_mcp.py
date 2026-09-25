@@ -128,7 +128,7 @@ def test_mcp_tools_registered(mcp_server_module):
 
     tools = asyncio.run(mcp_server_module.server.list_tools())
     names = {t.name for t in tools}
-    assert names == {"describe", "pivot", "llm_context", "insights", "suggest", "slicers", "anomalies"}
+    assert names == {"describe", "pivot", "llm_context", "insights", "compare", "suggest", "slicers", "anomalies"}
     for t in tools:
         assert t.description and len(t.description) > 10
 
@@ -262,3 +262,48 @@ def test_mcp_anomalies_and_distributions_tools(mcp_server_module, tmp_path, fw):
     d2 = json.loads(r2.content[0].text)
     bytes_col = next(c for c in d2["columns"] if c["name"] == "bytes")
     assert bytes_col["distribution"]["family"] in p2h.DIST_FAMILIES
+
+
+def test_agent_compare_split_vs_rest(fw):
+    r = agent.compare(fw, split={"column": "action", "eq": "deny"}, n=3)
+    _assert_json_safe(r)
+    assert set(r) == {"description", "mode", "layout", "metric", "metric_meaning", "a", "b", "shape", "table", "top"}
+    assert r["metric"] == "lift" and r["a"]["name"] == "action=deny" and r["b"]["name"] == "rest"
+    assert r["a"]["rows"] == (fw["action"] == "deny").sum() and r["a"]["rows"] + r["b"]["rows"] == len(fw)
+    assert len(r["top"]) == 3 and {"row", "col", "delta", "ratio", "lift", "only_in"} <= set(r["top"][0])
+
+
+def test_agent_compare_vs_and_filters_apply_to_both_sides(fw):
+    r = agent.compare(
+        fw, split={"column": "timestamp", "on": "2026-03-02"}, vs={"column": "timestamp", "on": "2026-03-01"},
+        filters=[{"column": "protocol", "eq": "TCP"}], metric="pct_change", n=2, rows=["dst_port"], cols=["action"],
+    )
+    _assert_json_safe(r)
+    assert r["metric"] == "pct_change" and r["a"]["slices"] == ["protocol=TCP", "timestamp=2026-03-02"]
+    assert r["b"]["slices"] == ["protocol=TCP", "timestamp=2026-03-01"]
+    assert "pct_change" in r["top"][0]
+    neg = agent.compare(fw, split={"column": "action", "not_eq": "allow"}, n=1)
+    assert neg["a"]["rows"] == (fw["action"] != "allow").sum()
+
+
+def test_agent_compare_metric_validated(fw):
+    with pytest.raises(ValueError):
+        agent.compare(fw, split={"column": "action", "eq": "deny"}, metric="nope")
+    with pytest.raises(ValueError, match="additive"):
+        agent.compare(fw, split={"column": "action", "eq": "deny"}, values="bytes", agg="mean", metric="lift")
+
+
+def test_mcp_compare_tool(mcp_server_module, tmp_path, fw):
+    import asyncio
+
+    path = tmp_path / "fw.csv"
+    fw.to_csv(path, index=False)
+
+    async def run():
+        return await mcp_server_module.server.call_tool(
+            "compare", {"source": str(path), "split": {"column": "action", "eq": "deny"}, "n": 2}
+        )
+
+    r = asyncio.run(run())
+    d = json.loads(r.content[0].text)
+    assert d["metric"] == "lift" and len(d["top"]) == 2 and d["a"]["name"] == "action=deny"

@@ -17,7 +17,7 @@ from dataclasses import replace as _replace
 
 from . import _binning as B
 from ._cluster import METHODS, cluster_frame, cluster_rows, cocluster as _cocluster
-from ._fit import COUNT, Dim, DimSpec, FitOptions, Layout, build_table, default_agg, fit_layout, freeze, materialize, plan_dim
+from ._fit import COUNT, Dim, DimSpec, FitOptions, Layout, build_table, default_agg, fit_layout, freeze, materialize, order_index, plan_dim
 from ._fit import _resolve_axis, suggest_layouts
 from ._density import DistFit
 from ._html import expected_independence, hist_svg, pivot_html, surprise_residuals
@@ -432,12 +432,17 @@ class View:
         """The histogram table: every planned bin/level on the row axis, series as columns."""
         if "bins" not in self._cache:
             with log.step("bins", self._layout.describe()):
-                if self._paged is not None:
-                    t = self._paged_table(observed=False)
-                else:
-                    t = build_table(self.data, self._layout, observed=False, engine=self._options.engine)
-                self._cache["bins"] = self._trim(t)
+                self._cache["bins"] = self._trim(self._bins_full())
         return self._cache["bins"]
+
+    def _bins_full(self) -> pd.DataFrame:
+        """:meth:`bins` before empty leading/trailing bins are trimmed: every planned bin."""
+        if "bins_full" not in self._cache:
+            if self._paged is not None:
+                self._cache["bins_full"] = self._paged_table(observed=False)
+            else:
+                self._cache["bins_full"] = build_table(self.data, self._layout, observed=False, engine=self._options.engine)
+        return self._cache["bins_full"]
 
     @property
     def approximate(self) -> bool:
@@ -492,21 +497,9 @@ class View:
 
     def _reorder(self, table: pd.DataFrame) -> pd.DataFrame:
         """Order index/columns the way the sample's categories are ordered (unseen labels last)."""
-        def order_for(dims: Tuple[Dim, ...], index: pd.Index) -> pd.Index:
-            if not dims or len(index) == 0:
-                return index
-            ranks = []
-            for d in dims:
-                cats = list(materialize(self.data, d).cat.categories) if d.column in self.data.columns else []
-                ranks.append({c: i for i, c in enumerate(cats)})
-            def key(t: Any) -> Tuple:
-                tup = t if isinstance(t, tuple) else (t,)
-                return tuple(ranks[i].get(v, len(ranks[i]) + 1) if i < len(ranks) else 0 for i, v in enumerate(tup))
-            return pd.Index(sorted(index, key=key), name=index.name) if not isinstance(index, pd.MultiIndex) else pd.MultiIndex.from_tuples(sorted(index, key=key), names=index.names)
-
-        table = table.reindex(order_for(self._layout.rows, table.index))
+        table = table.reindex(order_index(table.index, self._layout.rows, self.data))
         if self._layout.cols:
-            table = table.reindex(columns=order_for(self._layout.cols, table.columns))
+            table = table.reindex(columns=order_index(table.columns, self._layout.cols, self.data))
         return table
 
     def materialize(self, max_rows: Optional[int] = None) -> "View":
@@ -1214,6 +1207,53 @@ class View:
 
     def _repr_html_(self) -> str:
         return self.html()
+
+    # ------------------------------------------------------------------ comparing
+
+    def compare(self, *args: Any, metric: Optional[str] = None, names: Optional[Sequence[str]] = None, **kwargs: Any) -> Any:
+        """Two sides of this data on one shared layout, cell by cell - a :class:`Comparison`.
+
+        Forms::
+
+            v.compare(action="deny")                     # deny vs the rest (any slice() form)
+            v.compare("bytes > 1000")                    # a query vs its complement
+            v.compare("action", "deny")                  # positional column/value, vs the rest
+            v.compare("action", "deny", "allow")         # deny vs allow
+            v.compare({"timestamp": "2026-03-02"},
+                      {"timestamp": "2026-03-01"})       # any two side specs (mappings or queries)
+            today.compare(yesterday)                     # two Views (yesterday laid out like today)
+
+        The auto-fit is frozen for the comparison: both sides get *this* view's dimensions,
+        bin edges and kept top-N labels, so every cell means the same thing on both sides
+        (a per-side refit would pick whatever suits each side and make them incomparable).
+        If the split column is itself on an axis it is taken off it - splitting on
+        ``action`` when ``action`` is the column axis would leave nothing to compare - and
+        that axis is refilled by one fit on this view's data.
+
+        ``metric`` is what the comparison table shows: ``"lift"`` (default for a split of
+        an additive measure - A's share of its own total over B's share, so a 5%-of-traffic
+        slice compares fairly against the other 95%), ``"delta"`` (default otherwise: A -
+        B), ``"ratio"``, ``"pct_change"``, ``"share_delta"`` (percentage points), or the
+        raw ``"a"``/``"b"``/``"share_a"``/``"share_b"``. ``names`` labels the sides. The
+        result renders as a diverging heatmap (blue = more on side A, red = less), lists
+        the biggest movers via ``.top()``, slices both sides at once, and ``.toggle()``\\ s
+        to paired histograms on shared bins.
+        """
+        from ._compare import compare as _compare
+
+        return _compare(self, *args, metric=metric, names=names, **kwargs)
+
+    def facet(self, column: str, n: int = 6, *, levels: Optional[Sequence[Any]] = None) -> Any:
+        """Small multiples: this view once per value of ``column`` (the ``n`` most frequent,
+        or the given ``levels``), all on the same layout and one shared colour scale, as
+        a :class:`Facets` grid. The faceted column is taken off the axes (if it was on one)
+        and every panel shares the same row/column labels, so panel 2's top-left cell is
+        the same (row, column) as panel 1's. ``facets.compare("deny", "allow")`` turns two
+        panels into a :class:`Comparison`; slicing and ``toggle()`` apply to every panel.
+        """
+        from ._compare import facet as _facet
+
+        return _facet(self, column, n, levels=levels)
 
     def explore(self, **kw: Any) -> Any:
         """Open the interactive Jupyter explorer (needs ``ipywidgets``)."""

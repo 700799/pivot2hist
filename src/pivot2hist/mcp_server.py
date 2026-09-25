@@ -41,9 +41,12 @@ server = _Server(
         "description and a markdown table instead of raw JSON rows. Call insights() when "
         "the question is 'what's actually interesting here' rather than a specific "
         "cross-tab - it's a local, non-LLM statistical pass (distributions, skew, "
-        "correlated columns, surprising cells) over whatever filters you've applied. "
-        "Files are surveyed against available memory and streamed page by page when too "
-        "large to hold in memory, so any source can be passed directly by path."
+        "correlated columns, surprising cells) over whatever filters you've applied. Call "
+        "compare() when the question is 'how does X differ from Y' (deny vs allow, today vs "
+        "yesterday, one host vs the rest): both sides land on one shared layout and it "
+        "returns the cells that moved most. Files are surveyed against available memory "
+        "and streamed page by page when too large to hold in memory, so any source can be "
+        "passed directly by path."
     ),
 )
 
@@ -150,6 +153,39 @@ def insights(
     return _agent.insights(
         source, rows=rows, cols=cols, values=values, agg=agg, filters=filters,
         sensitivity=sensitivity, max_findings=max_findings, memory_budget_mb=memory_budget_mb,
+    )
+
+
+@server.tool()
+def compare(
+    source: str,
+    split: Dict[str, Any],
+    vs: Optional[Dict[str, Any]] = None,
+    metric: Optional[str] = None,
+    n: int = 10,
+    rows: Optional[List[str]] = None,
+    cols: Optional[List[str]] = None,
+    values: Optional[str] = None,
+    agg: Optional[str] = None,
+    filters: Optional[List[Dict[str, Any]]] = None,
+    max_rows: int = 40,
+    max_cols: int = 12,
+    memory_budget_mb: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Compare two sides of the data cell by cell on one shared pivot layout - "how does
+    deny differ from allow", "today vs yesterday", "this host vs the rest". `split` is one
+    filter object naming side A ({"column": "action", "eq": "deny"}, {"column": "bytes",
+    "gt": 1000}, {"query": "..."}); side B is everything else, or `vs` (a second filter
+    object, e.g. {"column": "timestamp", "on": "2026-03-01"}). `filters` narrow both sides
+    first. The layout is auto-fitted once (or fixed via rows/cols/values/agg) and frozen
+    for both sides so every cell means the same thing on each. metric: "lift" (default for
+    count/sum: A's share of its total over B's share - size-independent, >1 = over-
+    represented in A), "delta" (A - B, default otherwise), "ratio", "pct_change",
+    "share_delta". Returns both sides' totals, the metric table, and `top`: the n cells
+    that differ most with both raw values, delta, ratio, lift and only_in."""
+    return _agent.compare(
+        source, split=split, vs=vs, metric=metric, n=n, rows=rows, cols=cols, values=values, agg=agg,
+        filters=filters, max_rows=max_rows, max_cols=max_cols, memory_budget_mb=memory_budget_mb,
     )
 
 

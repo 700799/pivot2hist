@@ -39,8 +39,9 @@ from ._profile import profile as _profile
 from ._semantic import HIERARCHY, infer_semantic
 from ._survey import Machine, PagedSource, Plan, Survey, downcast, load_planned, survey
 from ._view import HIST, PIVOT, Derived, Filter, View
+from ._compare import ADDITIVE, METRICS, METRIC_HELP, Comparison, Facets
 
-__version__ = "0.13.0"
+__version__ = "0.14.0"
 
 _PLANNED_KEYS = ("memory_budget_mb", "mode", "columns", "query", "table", "sample_rows", "page_rows")
 
@@ -218,6 +219,62 @@ def insights(
     return v.insights(sensitivity=sensitivity, max_findings=max_findings, max_pairs=max_pairs)
 
 
+def _split_fit_kwargs(opts: dict) -> dict:
+    """Pop the keywords that are neither :class:`FitOptions` fields nor loading knobs
+    (they name columns to split on)."""
+    fit_keys = set(FitOptions.__dataclass_fields__) | set(_PLANNED_KEYS)
+    return {k: opts.pop(k) for k in list(opts) if k not in fit_keys}
+
+
+def compare(
+    data: Any,
+    *args: Any,
+    rows: Optional[Sequence[DimSpec]] = None,
+    cols: Optional[Sequence[DimSpec]] = None,
+    values: Optional[str] = None,
+    agg: Optional[str] = None,
+    metric: Optional[str] = None,
+    names: Optional[Sequence[str]] = None,
+    **opts: Any,
+) -> Comparison:
+    """Two sides of ``data`` on one shared, auto-fitted layout, cell by cell::
+
+        p2h.compare(df, action="deny")                   # deny vs the rest, as lift
+        p2h.compare(df, "action", "deny", "allow")       # deny vs allow
+        p2h.compare(df, "bytes > 1000", metric="delta")  # a query vs its complement
+        p2h.compare("events.parquet", {"timestamp": "2026-03-02"}, {"timestamp": "2026-03-01"})
+
+    Equivalent to ``p2h.fit(data, rows=..., ...).compare(...)``: keyword arguments that are
+    fit options (``max_rows``, ``layers``, ``memory_budget_mb`` ...) go to the fit, any
+    other ``column=value`` keyword is the split. See :meth:`View.compare` for the forms,
+    the metrics, and why the layout is frozen across the two sides.
+    """
+    split = _split_fit_kwargs(opts)
+    v = fit(data, rows=rows, cols=cols, values=values, agg=agg, **opts)
+    return v.compare(*args, metric=metric, names=names, **split)
+
+
+def facet(
+    data: Any,
+    column: str,
+    n: int = 6,
+    *,
+    rows: Optional[Sequence[DimSpec]] = None,
+    cols: Optional[Sequence[DimSpec]] = None,
+    values: Optional[str] = None,
+    agg: Optional[str] = None,
+    levels: Optional[Sequence[Any]] = None,
+    **opts: Any,
+) -> Facets:
+    """Small multiples of ``data``: the auto-fitted pivot once per value of ``column``
+    (the ``n`` most frequent, or ``levels``), all on one layout and one colour scale.
+    Equivalent to ``p2h.fit(data, ...).facet(column, n, levels=levels)``; see
+    :meth:`View.facet`.
+    """
+    v = fit(data, rows=rows, cols=cols, values=values, agg=agg, **opts)
+    return v.facet(column, n, levels=levels)
+
+
 def explore(data: Any, **kw: Any) -> Any:
     """Interactive Jupyter explorer (needs ``ipywidgets``): menus to alter, slice, best-fit,
     reduce and cluster, with heatmap pivots and SVG histograms."""
@@ -317,7 +374,7 @@ def dependencies(data: Any, columns: Optional[Sequence[str]] = None, *, bins: in
 
 __all__ = [
     "fit", "pivot", "histogram", "profile", "load", "suggest", "explore", "cluster", "chains", "regimes", "dependencies",
-    "llm_context", "insights",
+    "llm_context", "insights", "compare", "facet", "Comparison", "Facets", "METRICS", "METRIC_HELP", "ADDITIVE",
     "survey", "load_planned", "downcast", "stats", "verbose", "log", "distribution",
     "sequences", "transitions", "transition_matrix", "steady_state",
     "View", "Layout", "Dim", "FitOptions", "Filter", "Derived", "Profile", "ColumnProfile",

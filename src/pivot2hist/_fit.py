@@ -983,6 +983,25 @@ def freeze(layout: Layout, df: pd.DataFrame) -> Layout:
     return Layout(tuple(fz(d) for d in layout.rows), tuple(fz(d) for d in layout.cols), layout.values, layout.agg)
 
 
+def order_index(index: pd.Index, dims: Tuple[Dim, ...], frame: pd.DataFrame) -> pd.Index:
+    """``index`` re-sorted into each dim's level order as materialized on ``frame``
+    (labels ``frame`` never produces go last, in their existing order)."""
+    if not dims or len(index) == 0:
+        return index
+    ranks = []
+    for d in dims:
+        cats = list(materialize(frame, d).cat.categories) if d.column in frame.columns else []
+        ranks.append({c: i for i, c in enumerate(cats)})
+
+    def key(t: Any) -> Tuple:
+        tup = t if isinstance(t, tuple) else (t,)
+        return tuple(ranks[i].get(v, len(ranks[i]) + 1) if i < len(ranks) else 0 for i, v in enumerate(tup))
+
+    if isinstance(index, pd.MultiIndex):
+        return pd.MultiIndex.from_tuples(sorted(index, key=key), names=index.names)
+    return pd.Index(sorted(index, key=key), name=index.name)
+
+
 
 def _finish_table(
     frame: pd.DataFrame,

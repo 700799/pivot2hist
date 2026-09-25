@@ -28,6 +28,7 @@ except ImportError as e:  # pragma: no cover
 from ._binning import RULES, human
 from ._chains import sequences as _sequences
 from ._cluster import COMETHODS, METHODS
+from ._compare import METRICS, METRIC_HELP, Comparison, Facets
 from ._fit import AGGS, COUNT, FitOptions, Layout
 from ._log import log
 from ._profile import BOOLEAN, CATEGORICAL, DATETIME, NUMERIC, Profile, profile
@@ -303,6 +304,183 @@ class Explorer:
             banner + f"<div style='font-size:12px;margin-bottom:8px'>{_html.escape(report['summary'])}</div>" + findings_html
         )
 
+    # ------------------------------------------------------------------ compare
+
+    def pin(self) -> View:
+        """Remember the current view as the comparison *baseline* (side B). Change the
+        view - add a slice, move to another day, refit - then :meth:`compare_with_baseline`
+        (or the tab's button) puts the new view (side A) against it, cell by cell, on the
+        baseline's layout."""
+        self._baseline = self.view
+        self.w_cmp_status.value = f"<span style='font-size:12px;color:#555'>baseline: {_html.escape(self.view.title())}</span>"
+        return self._baseline
+
+    def compare_with_baseline(self, *, metric: Optional[str] = None) -> Optional[Comparison]:
+        """The current view (side A) against the pinned baseline (side B) - see :meth:`pin`.
+        Renders into the Compare tab and returns the :class:`~pivot2hist.Comparison`."""
+        if self._baseline is None:
+            self.w_cmp_status.value = "<span style='color:#b00020;font-size:12px'>pin a baseline first</span>"
+            return None
+        if metric is not None:
+            self._set_metric(metric)
+        self._compare_recipe = {"kind": "baseline"}
+        self._refresh_compare()
+        return self.comparison if isinstance(self.comparison, Comparison) else None
+
+    def compare(self, *args: Any, metric: Optional[str] = None, **kwargs: Any) -> Comparison:
+        """:meth:`View.compare` on the current view, rendered into the Compare tab and kept
+        in step with it - every later change to the view re-runs the same comparison.
+        Same forms: ``explorer.compare(action="deny")``, ``explorer.compare("action",
+        "deny", "allow")``, ``explorer.compare("bytes > 1000")``. Returns the
+        :class:`~pivot2hist.Comparison`."""
+        if metric is not None:
+            self._set_metric(metric)
+        self._compare_recipe = {"kind": "custom", "args": args, "kwargs": kwargs}
+        self._refresh_compare()
+        if not isinstance(self.comparison, Comparison):
+            raise ValueError(self._compare_error or "comparison failed")
+        return self.comparison
+
+    def facet(self, column: str, n: int = 6) -> Facets:
+        """:meth:`View.facet` on the current view, rendered into the Compare tab and kept in
+        step with it. Returns the :class:`~pivot2hist.Facets`."""
+        self._compare_recipe = {"kind": "facet", "column": column, "n": n}
+        self._refresh_compare()
+        if not isinstance(self.comparison, Facets):
+            raise ValueError(self._compare_error or "faceting failed")
+        return self.comparison
+
+    def _set_metric(self, metric: str) -> None:
+        if metric not in METRICS:
+            raise ValueError(f"unknown metric {metric!r}; use one of {METRICS}")
+        self._syncing = True
+        try:
+            self.w_cmp_metric.value = metric
+        finally:
+            self._syncing = False
+
+    def _on_cmp_col(self, change: Dict[str, Any]) -> None:
+        if self._syncing:
+            return
+        col = change["new"]
+        self._syncing = True
+        try:
+            opts: List[Tuple[str, Any]] = [("(every value: one panel each)", None)]
+            if col is not None:
+                vc = self.view.data[col].value_counts(dropna=False).head(12)
+                opts += [(f"{'(null)' if (isinstance(k, float) and np.isnan(k)) else k} ({int(c):,})",
+                          None if (isinstance(k, float) and np.isnan(k)) else k) for k, c in vc.items()]
+            self.w_cmp_val.options = opts
+            self.w_cmp_val.value = None
+            self.w_cmp_query.value = ""
+        finally:
+            self._syncing = False
+        self._compare_recipe = None if col is None else {"kind": "facet", "column": col, "n": 6}
+        self._refresh_compare()
+
+    def _on_cmp_change(self, change: Dict[str, Any]) -> None:
+        if self._syncing:
+            return
+        col = self.w_cmp_col.value
+        if col is not None and change["owner"] is self.w_cmp_val:
+            val = self.w_cmp_val.value
+            self._compare_recipe = {"kind": "facet", "column": col, "n": 6} if val is None else {"kind": "split", "column": col, "value": val}
+        self._refresh_compare()
+
+    def _on_cmp_query(self, change: Dict[str, Any]) -> None:
+        if self._syncing:
+            return
+        q = (change["new"] or "").strip()
+        if q:
+            self._syncing = True
+            try:
+                self.w_cmp_col.value = None
+                self.w_cmp_val.options = [("(every value: one panel each)", None)]
+                self.w_cmp_val.value = None
+            finally:
+                self._syncing = False
+            self._compare_recipe = {"kind": "query", "query": q}
+        elif self._compare_recipe and self._compare_recipe.get("kind") == "query":
+            self._compare_recipe = None
+        self._refresh_compare()
+
+    def _clear_compare(self) -> None:
+        self._syncing = True
+        try:
+            self.w_cmp_col.value = None
+            self.w_cmp_val.options = [("(every value: one panel each)", None)]
+            self.w_cmp_val.value = None
+            self.w_cmp_query.value = ""
+        finally:
+            self._syncing = False
+        self._compare_recipe = None
+        self._refresh_compare()
+
+    def _build_compare(self, recipe: Dict[str, Any]) -> Any:
+        kind = recipe["kind"]
+        if kind == "facet":
+            return self.view.facet(recipe["column"], recipe.get("n", 6))
+        if kind == "split":
+            c = self.view.compare(**{recipe["column"]: recipe["value"]})
+        elif kind == "query":
+            c = self.view.compare(recipe["query"])
+        elif kind == "baseline":
+            c = self.view.compare(self._baseline, names=("current", "baseline"))
+        else:
+            c = self.view.compare(*recipe["args"], **recipe["kwargs"])
+        want = self.w_cmp_metric.value
+        try:
+            return c.with_metric(want)
+        except ValueError:
+            # lift/shares need an additive measure; fall back rather than blank the tab
+            self._set_metric("delta")
+            self.w_cmp_status.value = (
+                f"<span style='font-size:12px;color:#a15c00'>{_html.escape(want)} needs a count/sum measure; "
+                f"showing delta for {_html.escape(c.layout.measure)}</span>"
+            )
+            return c.with_metric("delta")
+
+    def _refresh_compare(self) -> None:
+        recipe = self._compare_recipe
+        self._compare_error: Optional[str] = None
+        if recipe is None:
+            self.comparison = None
+            self.w_cmp_out.value = (
+                "<i style='color:#999'>pick a column to split on (with a value: that value vs the rest; alone: "
+                "one panel per value), type a query, or pin a baseline and compare the current view with it</i>"
+            )
+            return
+        with log.step("explorer", f"compare: {recipe['kind']}"):
+            try:
+                obj = self._build_compare(recipe)
+            except Exception as e:  # noqa: BLE001 - surface any failure in the tab, not a traceback
+                self.comparison = None
+                self._compare_error = f"{type(e).__name__}: {e}"
+                self.w_cmp_out.value = f"<span style='color:#b00020'>{_html.escape(self._compare_error)}</span>"
+                return
+            self.comparison = obj
+            if isinstance(obj, Comparison):
+                self.w_cmp_out.value = obj.html(side_by_side=bool(self.w_cmp_side.value))
+            else:
+                self.w_cmp_out.value = obj.html()
+
+    def _compare_code(self) -> List[str]:
+        r = self._compare_recipe
+        if not r:
+            return []
+        metric = self.w_cmp_metric.value
+        m = f", metric={metric!r}" if metric != "lift" else ""
+        if r["kind"] == "facet":
+            return [f"f = v.facet({r['column']!r}{'' if r.get('n', 6) == 6 else ', ' + str(r['n'])})", "f"]
+        if r["kind"] == "split":
+            return [f"c = v.compare({r['column']}={r['value']!r}{m})", "c"]
+        if r["kind"] == "query":
+            return [f"c = v.compare({r['query']!r}{m})", "c"]
+        if r["kind"] == "baseline":
+            return ["# baseline = the view as it was when pinned", f"c = v.compare(baseline, names=('current', 'baseline'){m})", "c"]
+        args = ", ".join(x for x in (", ".join(repr(a) for a in r["args"]), _kw(r["kwargs"])) if x)
+        return [f"c = v.compare({args}{m})", "c"]
+
     def _on_log(self, entry: Any) -> None:
         self._log_lines.append(entry.format())
         self._log_lines = self._log_lines[-200:]
@@ -504,6 +682,42 @@ class Explorer:
             self.w_insights,
         ])
 
+        # -- compare tab: A vs B on one shared layout, or one panel per value
+        self.w_cmp_col = W.Dropdown(options=[("(pick a column)", None)] + [(c, c) for c in labels], value=None,
+                                    description="Split on", style=st)
+        self.w_cmp_val = W.Dropdown(options=[("(every value: one panel each)", None)], value=None, description="Value",
+                                    style=st, layout=W.Layout(width="300px"))
+        self.w_cmp_query = W.Text(placeholder="or a query for side A, e.g. bytes > 1000 - side B is the rest  (Enter applies)",
+                                  description="Query", style=st, layout=W.Layout(width="560px"), continuous_update=False)
+        self.w_cmp_metric = W.Dropdown(options=[(f"{m}: {METRIC_HELP[m]}", m) for m in METRICS], value="lift",
+                                       description="Metric", style=st, layout=W.Layout(width="520px"))
+        self.w_cmp_side = W.Checkbox(value=False, description="show both sides too")
+        self.w_cmp_pin = W.Button(description="Pin as baseline", icon="thumb-tack", tooltip="remember the current view as side B")
+        self.w_cmp_vs_pin = W.Button(description="Compare with baseline", icon="exchange",
+                                     tooltip="the current view (side A) against the pinned baseline (side B)")
+        self.w_cmp_clear = W.Button(description="Clear", icon="eraser")
+        self.w_cmp_status = W.HTML()
+        self.w_cmp_out = W.HTML()
+        self._baseline: Optional[View] = None
+        self._compare_recipe: Optional[Dict[str, Any]] = None
+        self.comparison: Optional[Any] = None
+        compare_tab = W.VBox([
+            W.HTML(
+                "<i>Put two sides of the data on one shared layout and read them cell by cell. Pick a column "
+                "and a value (that value vs the rest), a column alone (one panel per value, one colour scale), "
+                "a query (its rows vs the rest), or pin the current view as a baseline, change it, and compare "
+                "the new view against the pinned one - today vs yesterday, before vs after a slice. The layout "
+                "is frozen across both sides so every cell means the same thing on each; blue = more on side A, "
+                "red = less; hover a cell for both raw values.</i>"
+            ),
+            W.HBox([self.w_cmp_col, self.w_cmp_val]),
+            W.HBox([self.w_cmp_query]),
+            W.HBox([self.w_cmp_metric, self.w_cmp_side]),
+            W.HBox([self.w_cmp_pin, self.w_cmp_vs_pin, self.w_cmp_clear]),
+            self.w_cmp_status,
+            self.w_cmp_out,
+        ])
+
         # -- code, profile, data, stats tabs; output; log panel
         self.w_code = W.HTML()
         self.w_out = W.HTML()
@@ -516,13 +730,14 @@ class Explorer:
         stats_tab = W.VBox([W.HTML("<i>The seven costliest kinds of step so far (wall time, CPU time, peak memory delta).</i>"), self.w_stats_btn, self.w_stats])
 
         self.tabs = W.Tab(children=[layout_tab, hist_tab, slice_tab, reduce_tab, chains_tab, style_tab, self.w_code,
-                                    self.w_profile, self.w_data, stats_tab, fields_tab, timeline_tab, insights_tab])
+                                    self.w_profile, self.w_data, stats_tab, fields_tab, timeline_tab, insights_tab, compare_tab])
         for i, t in enumerate(["Layout", "Histogram", "Slicers", "Reduce & cluster", "Chains", "Style", "Code",
-                               "Profile", "Data", "Stats", "Fields", "Timeline", "Insights"]):
+                               "Profile", "Data", "Stats", "Fields", "Timeline", "Insights", "Compare"]):
             self.tabs.set_title(i, t)
         self.FIELDS_TAB = 10
         self.TIMELINE_TAB = 11
         self.INSIGHTS_TAB = 12
+        self.COMPARE_TAB = 13
         top = W.HBox([self.w_mode, self.w_best, self.w_suggest_btn, self.w_suggest, self.w_undo, self.w_reset])
         self.box = W.VBox([top, self.tabs, self.w_status, self.w_out, W.HTML("<b style='font-size:11px;color:#666'>log</b>"), self.w_log])
         self._refresh_data_tab()
@@ -562,6 +777,14 @@ class Explorer:
         self.w_checkpoint_delete.on_click(lambda _: self._delete_checkpoint())
         self.w_timeline_slider.observe(self._on_timeline, names="value")
         self.w_calculate_btn.on_click(lambda _: self.calculate())
+        self.w_cmp_col.observe(self._on_cmp_col, names="value")
+        for w in (self.w_cmp_val, self.w_cmp_metric, self.w_cmp_side):
+            w.observe(self._on_cmp_change, names="value")
+        self.w_cmp_query.observe(self._on_cmp_query, names="value")  # continuous_update=False: fires on Enter/blur
+        self.w_cmp_pin.on_click(lambda _: self.pin())
+        self.w_cmp_vs_pin.on_click(lambda _: self.compare_with_baseline())
+        self.w_cmp_clear.on_click(lambda _: self._clear_compare())
+        self._refresh_compare()
 
     # ------------------------------------------------------------------ recipe -> view
 
@@ -730,6 +953,7 @@ class Explorer:
         if disp:
             lines.append(f"v = v.style({_kw(disp)})")
         lines.append("v")
+        lines.extend(self._compare_code())
         return "\n".join(lines)
 
     def _rebuild(self) -> None:
@@ -743,6 +967,8 @@ class Explorer:
         self._refresh_stats()
         self._refresh_field_slicers()
         self._render_insights()  # updates the "view changed since last Calculate" banner
+        if getattr(self, "_compare_recipe", None):
+            self._refresh_compare()  # the comparison is a lens on the view: keep it in step
         self._refresh_log()  # picks up a theme change immediately, not just on the next log line
 
     def _refresh_stats(self) -> None:

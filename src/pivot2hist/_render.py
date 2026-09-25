@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import math
 import shutil
-from typing import Any, List, Optional, Tuple
+from typing import Any, Callable, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -43,19 +43,22 @@ def fmt_cell(x: Any, *, compact: bool = False) -> str:
     return str(x)
 
 
-def format_table(table: pd.DataFrame, *, compact: bool = False) -> pd.DataFrame:
-    """Copy of ``table`` with every cell formatted as a string."""
-    return table.apply(lambda col: col.map(lambda v: fmt_cell(v, compact=compact)))
+def format_table(table: pd.DataFrame, *, compact: bool = False,
+                 formatter: Optional[Callable[[Any], str]] = None) -> pd.DataFrame:
+    """Copy of ``table`` with every cell formatted as a string (``formatter`` replaces the
+    default number formatting, e.g. for ratios or percentage points)."""
+    fmt = formatter or (lambda v: fmt_cell(v, compact=compact))
+    return table.apply(lambda col: col.map(fmt))
 
 
 def render_pivot(table: pd.DataFrame, *, width: Optional[int] = None, max_rows: Optional[int] = None,
-                 compact: bool = False) -> str:
+                 compact: bool = False, formatter: Optional[Callable[[Any], str]] = None) -> str:
     """Text rendering of a pivot table."""
     width = width or terminal_width()
     if table.empty:
         return "(empty)"
     shown = table if max_rows is None or len(table) <= max_rows else table.head(max_rows)
-    text = format_table(shown, compact=compact).to_string(line_width=width, justify="right")
+    text = format_table(shown, compact=compact, formatter=formatter).to_string(line_width=width, justify="right")
     if len(shown) < len(table):
         text += f"\n... {len(table) - len(shown):,} more rows"
     return text

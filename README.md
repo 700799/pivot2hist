@@ -33,6 +33,8 @@ p2h.dependencies(df)               # which columns move together, as a pivot (mu
 p2h.verbose(); p2h.stats(7)        # scrolling step log; the seven costliest steps
 v.llm_context()                    # description + metadata + a markdown table, sized for a model's context
 v.insights()                       # rich local summary: distributions, mixtures, anomalies, ranked findings — no LLM
+v.compare(action="deny")           # deny vs the rest on one shared layout: diverging heatmap, .top() movers, toggles too
+v.facet("action")                  # small multiples: one panel per value, same layout, one colour scale
 p2h.agent.pivot("firewall.csv", rows=["src_ip"], filters=[{"column": "action", "eq": "deny"}])  # plain JSON, for LLM agents
 ```
 
@@ -572,6 +574,93 @@ once in the explorer's **Insights** tab, then whenever you slice further, hit
 **Calculate** again to recompute on the narrower data ("recalculate" is just calling this
 again).
 
+## Comparing: A vs B on one layout
+
+The question behind most slicing is a comparison — *how does `deny` differ from `allow`?
+today from yesterday? this host from the rest?* — and eyeballing two heatmaps in two
+cells answers it badly. `compare()` puts the two sides on **one shared layout** and reads
+them cell by cell:
+
+```python
+c = v.compare(action="deny")        # deny (side A) vs the rest of the data (side B)
+c                                   # notebook: a diverging heatmap — blue = more in A, red = less
+c.top()                             # the cells that differ most, as a DataFrame
+c.sides()                           # the two aligned raw tables
+c.toggle()                          # the same comparison as paired histograms (% of each side)
+```
+
+Every form `slice()` takes works as a split, plus a few for two named sides:
+
+```python
+v.compare("action", "deny", "allow")               # deny vs allow
+v.compare("bytes > 1000")                          # a query vs its complement
+v.compare({"timestamp": "2026-03-02"},
+          {"timestamp": "2026-03-01"})             # today vs yesterday, from one view
+today.compare(yesterday)                           # two Views (yesterday laid out like today)
+p2h.compare("events.parquet", action="deny")       # the plain function: auto-fits, then splits
+```
+
+**The layout is frozen across the sides.** Auto-fitting each side separately would pick
+whatever suits each best — different bins, a different top-N, even different columns —
+and make them incomparable. So the comparison takes *this* view's dimensions, bin edges
+and kept top-N labels and imposes them on both sides; row 3 / column 2 means the same
+thing on each, and cells can be subtracted. Labels one side never produced are still
+there on the other (a 0 for a count or sum, blank for a mean). If the split column sits
+on an axis — splitting on `action` when `action` *is* the column axis would leave
+nothing to compare — it is taken off and that axis refilled by one fit.
+
+**Metrics** — what the table shows (`c.with_metric(...)`, `metric=` on `compare`):
+
+| metric | meaning | default |
+| --- | --- | --- |
+| `lift` | A's share of its own total ÷ B's share of its total: > 1 = over-represented in A | for a split of a count/sum |
+| `delta` | A − B | otherwise (two views; a mean/median/min/max) |
+| `ratio`, `pct_change` | A ÷ B; (A − B) ÷ B in % — `new` where only A has it | |
+| `share_delta` | A's share − B's share, in percentage points | |
+| `a`, `b`, `share_a`, `share_b` | one side as is, or as % of its own total | |
+
+`lift` is the default for a split because sizes usually differ by construction: `deny` is
+5% of the traffic, and comparing its raw counts against the other 95% says nothing. Shares
+put the sides on the same footing; `lift` = 1 means "same share on both sides".
+Share-based metrics need a measure that adds up, so they refuse a `mean(bytes)` layout
+with a clear message and `delta`/`ratio` remain.
+
+**Ranking and colour agree.** Ratio-like metrics are coloured and ranked by a *shrunk*
+log-ratio, `log2((a + e) / (b + e))` with `e` the median positive cell: ×4 and ×0.25 are
+equally strong, a ×142 built on a handful of bytes ranks *below* a ×6 built on millions,
+and a cell present on one side only ranks by how much is actually there instead of every
+such cell tying at infinity. The values shown — in the cells, in `top()`, in the hover
+text that carries both raw values, the delta, the ratio and the lift — are the exact ones,
+and the table says so in a footnote, since a ×142 on a few rows deliberately reads paler
+than a ×6 on many.
+
+**Slice and interrogate.** A comparison is interrogated like a view: `c.slice(protocol="TCP")`
+narrows *both* sides (the layout stays put, so it's still the same cells); `c.unslice()`
+drops the shared slices but keeps the ones that define the sides; `c.exclude(...)`,
+`c.where(...)`, `c.swap()` (B becomes the reference), `c.style(theme="graphite")`,
+`c.html(side_by_side=True)` (both raw tables on one colour scale next to the diff),
+`c.histogram("bytes")` (bins planned on both sides' data together, so they line up), and
+`c.to_dict()` / `c.llm_context()` for code or a model.
+
+**Facets — small multiples.** One panel per value of a column, same layout, one colour
+scale, so the panels read against each other:
+
+```python
+f = v.facet("action")            # one panel per value (the 6 most frequent by default)
+f["deny"]                        # every panel is an ordinary View on the shared layout
+f.compare("deny", "allow")       # two panels as a Comparison; f.compare("deny") = deny vs the rest
+f.toggle()                       # histograms per facet on shared bins, one y axis
+f.slice(protocol="TCP")          # slices apply to every panel
+```
+
+**In the explorer**, the **Compare** tab does all of this by menu: pick a column and a
+value (that value vs the rest), a column alone (one panel per value), a query, or **Pin as
+baseline** — then change the view (a slice, another day, a refit) and **Compare with
+baseline** puts the new view against the pinned one. The comparison is a lens on the
+view, so every later change to the view re-runs it, and the Code tab shows the equivalent
+`v.compare(...)`. For agents, `agent.compare(source, split=, vs=, metric=)` and the MCP
+`compare` tool return both sides' totals, the metric table and the top movers as JSON.
+
 ## Jupyter explorer
 
 ```python
@@ -587,8 +676,9 @@ Reduce & cluster (sample, cluster k / method / on / collapse, co-cluster, coarse
 finer), Chains (state, entity, time, probabilities, plus the most frequent 3-step
 chains), Style (theme, heat incl. `surprise`, totals, subtotals, outline, bars, compact),
 Code (the Python reproducing the current view), Profile, Data (the survey and plan),
-Stats (the seven costliest steps) and **Timeline** (checkpoints, see below). A scrolling
-log of major steps sits under the output. `explorer.snapshot_html()` renders a static
+Stats (the seven costliest steps), **Timeline** (checkpoints, see below), **Insights**
+(the local summary, see above) and **Compare** (A vs B on one layout, small multiples,
+pin-a-baseline — see *Comparing*). A scrolling log of major steps sits under the output. `explorer.snapshot_html()` renders a static
 picture of the interface for docs or sharing.
 
 **Fields tab**: every column as a draggable chip — kind, semantic type, non-null count
@@ -666,6 +756,7 @@ agent.pivot("events.parquet", mode="hist", on="bytes", bins=8)
 agent.suggest("events.parquet", 5)                         # ranked layouts, with score and confidence
 agent.slicers("events.parquet", columns=["action"])        # values to filter on
 agent.anomalies("events.parquet", rows=["dst_port"], cols=["action"])
+agent.compare("events.parquet", split={"column": "action", "eq": "deny"})   # deny vs the rest: lift per cell, top movers
 ```
 
 Filter objects: `{"column": c, "eq"|"not_eq"|"in"|"range"|"gt"|"gte"|"lt"|"lte"|"regex"|"since"|"on": value}`
@@ -734,10 +825,12 @@ Tools: `describe(source, columns=, memory_budget_mb=, distributions=)`,
 `pivot(source, rows=, cols=, values=, agg=, filters=, mode=, on=, by=, bins=, max_rows=,
 max_cols=, memory_budget_mb=)`, `llm_context(...)` (same arguments as `pivot`, plus
 `table_max_rows=`/`table_max_cols=`), `insights(source, rows=, cols=, values=, agg=,
-filters=, sensitivity=, max_findings=, memory_budget_mb=)`, `suggest(source, n=,
-filters=)`, `slicers(source, columns=, top=)`, `anomalies(source, n=, rows=, cols=,
-filters=)`. Works against both `mcp<2` (`FastMCP`) and `mcp>=2` (`MCPServer`) —
-whichever is installed.
+filters=, sensitivity=, max_findings=, memory_budget_mb=)`, `compare(source, split=, vs=,
+metric=, n=, rows=, cols=, values=, agg=, filters=, ...)` (`split` and `vs` are filter
+objects naming the sides; `vs` omitted = the rest), `suggest(source, n=, filters=)`,
+`slicers(source, columns=, top=)`, `anomalies(source, n=, rows=, cols=, filters=)`.
+Works against both `mcp<2` (`FastMCP`) and `mcp>=2` (`MCPServer`) — whichever is
+installed.
 
 You can also just run it directly, no client needed:
 
