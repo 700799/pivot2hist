@@ -239,6 +239,70 @@ class Explorer:
         note = _html.escape(c["note"]) if c["note"] else "<i style='color:#999'>(no note)</i>"
         self.w_timeline_note.value = f"<div style='font-size:12px'><b>#{idx}</b> · {_html.escape(c['time'])} · {_html.escape(c['label'])}<br>{note}</div>"
 
+    # ------------------------------------------------------------------ insights
+
+    def calculate(self, *, sensitivity: Optional[float] = None) -> Dict[str, Any]:
+        """Run :meth:`View.insights` on the data currently in view (every slice already
+        applied) and refresh the Insights tab - the same thing its Calculate button
+        does. Local and non-LLM: distributions, a mixture-model check for multiple
+        populations in one numeric column, skew, concentration, outliers, correlated
+        columns, and surprising pivot cells, ranked by significance. Does not run on its
+        own on every change (it's real work); call it again - "recalculate" is just
+        calling this again - whenever the filtered data has moved on. Returns the report
+        dict (``{"summary", "shape", "columns", "findings", "sensitivity"}``).
+
+        ``sensitivity`` (0..1, default: the Insights tab's slider, itself defaulting to
+        0.5) sets how much of the ranked findings list actually surfaces - higher shows
+        more, including weaker findings; lower shows only the strongest. It isn't called
+        "temperature": this is a deterministic threshold on a computed score, not
+        sampling from a model.
+        """
+        s = self.w_sensitivity.value if sensitivity is None else sensitivity
+        if sensitivity is not None:
+            self._syncing = True
+            try:
+                self.w_sensitivity.value = s
+            finally:
+                self._syncing = False
+        try:
+            self._insights_report = self.view.insights(sensitivity=s)
+        except Exception as e:  # noqa: BLE001 - surface any failure in the Insights tab, not a traceback
+            self._insights_report = None
+            self.w_insights.value = f"<span style='color:#b00020'>{_html.escape(type(e).__name__)}: {_html.escape(str(e))}</span>"
+            return {}
+        self._insights_view_id = id(self.view)
+        self._render_insights()
+        return self._insights_report
+
+    def _render_insights(self) -> None:
+        report = self._insights_report
+        if report is None:
+            self.w_insights.value = "<i style='color:#999'>click Calculate to analyze the data currently in view</i>"
+            return
+        stale = id(self.view) != self._insights_view_id
+        banner = (
+            "<div style='color:#a15c00;font-size:11px;margin-bottom:6px'>&#9888; the view has changed since "
+            "this was calculated — click Calculate to refresh</div>"
+        ) if stale else ""
+        if report["findings"]:
+            rows = "".join(
+                f"<tr><td style='padding:2px 8px;text-align:right;color:#888'>{f['significance']:.2f}</td>"
+                f"<td style='padding:2px 8px;color:#667'>{_html.escape(f['kind'])}</td>"
+                f"<td style='padding:2px 8px'>{_html.escape(f['text'])}</td></tr>"
+                for f in report["findings"]
+            )
+            findings_html = (
+                "<table style='font-size:12px;border-collapse:collapse;width:100%'>"
+                "<tr style='background:#f5f6f8'><th style='padding:2px 8px'>sig</th>"
+                "<th style='padding:2px 8px;text-align:left'>kind</th>"
+                "<th style='padding:2px 8px;text-align:left'>observation</th></tr>" + rows + "</table>"
+            )
+        else:
+            findings_html = "<i style='color:#999'>nothing crossed the significance bar — try raising sensitivity</i>"
+        self.w_insights.value = (
+            banner + f"<div style='font-size:12px;margin-bottom:8px'>{_html.escape(report['summary'])}</div>" + findings_html
+        )
+
     def _on_log(self, entry: Any) -> None:
         self._log_lines.append(entry.format())
         self._log_lines = self._log_lines[-200:]
@@ -416,6 +480,30 @@ class Explorer:
             self.w_timeline_list,
         ])
 
+        # -- insights tab: local, non-LLM analysis of the data currently in view
+        self.w_sensitivity = W.FloatSlider(value=0.5, min=0.0, max=1.0, step=0.05, description="Sensitivity",
+                                           style=st, layout=W.Layout(width="360px"))
+        self.w_calculate_btn = W.Button(description="Calculate", icon="magic", button_style="primary")
+        self.w_insights = W.HTML()
+        self._insights_report: Optional[Dict[str, Any]] = None
+        self._insights_view_id: Optional[int] = None
+        insights_tab = W.VBox([
+            W.HTML(
+                "<i>A local, non-LLM read of whatever's currently in view (every slice already applied): "
+                "column types, distributions, a mixture-model check for multiple populations in one numeric "
+                "column, skew, concentration, outliers, correlated columns, and the most surprising pivot "
+                "cells — ranked by how notable they are, not just listed. Click Calculate any time the data "
+                "changes (it does not run itself, since it's real work on every slice).</i>"
+            ),
+            W.HBox([self.w_sensitivity, self.w_calculate_btn]),
+            W.HTML(
+                "<span style='font-size:11px;color:#889'>0 = only the strongest finding or two; 1 = "
+                "everything that crosses any bar at all. Not called \"temperature\": this is a deterministic "
+                "threshold on a computed significance score, not sampling from a model.</span>"
+            ),
+            self.w_insights,
+        ])
+
         # -- code, profile, data, stats tabs; output; log panel
         self.w_code = W.HTML()
         self.w_out = W.HTML()
@@ -428,12 +516,13 @@ class Explorer:
         stats_tab = W.VBox([W.HTML("<i>The seven costliest kinds of step so far (wall time, CPU time, peak memory delta).</i>"), self.w_stats_btn, self.w_stats])
 
         self.tabs = W.Tab(children=[layout_tab, hist_tab, slice_tab, reduce_tab, chains_tab, style_tab, self.w_code,
-                                    self.w_profile, self.w_data, stats_tab, fields_tab, timeline_tab])
+                                    self.w_profile, self.w_data, stats_tab, fields_tab, timeline_tab, insights_tab])
         for i, t in enumerate(["Layout", "Histogram", "Slicers", "Reduce & cluster", "Chains", "Style", "Code",
-                               "Profile", "Data", "Stats", "Fields", "Timeline"]):
+                               "Profile", "Data", "Stats", "Fields", "Timeline", "Insights"]):
             self.tabs.set_title(i, t)
         self.FIELDS_TAB = 10
         self.TIMELINE_TAB = 11
+        self.INSIGHTS_TAB = 12
         top = W.HBox([self.w_mode, self.w_best, self.w_suggest_btn, self.w_suggest, self.w_undo, self.w_reset])
         self.box = W.VBox([top, self.tabs, self.w_status, self.w_out, W.HTML("<b style='font-size:11px;color:#666'>log</b>"), self.w_log])
         self._refresh_data_tab()
@@ -472,6 +561,7 @@ class Explorer:
         self.w_checkpoint_save.on_click(lambda _: self.save_checkpoint(self.w_checkpoint_note.value))
         self.w_checkpoint_delete.on_click(lambda _: self._delete_checkpoint())
         self.w_timeline_slider.observe(self._on_timeline, names="value")
+        self.w_calculate_btn.on_click(lambda _: self.calculate())
 
     # ------------------------------------------------------------------ recipe -> view
 
@@ -652,6 +742,7 @@ class Explorer:
         self._sync_widgets()
         self._refresh_stats()
         self._refresh_field_slicers()
+        self._render_insights()  # updates the "view changed since last Calculate" banner
         self._refresh_log()  # picks up a theme change immediately, not just on the next log line
 
     def _refresh_stats(self) -> None:

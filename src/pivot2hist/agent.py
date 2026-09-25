@@ -275,6 +275,59 @@ def llm_context(
     return v.llm_context(max_rows=table_max_rows, max_cols=table_max_cols, notes=notes)
 
 
+def insights(
+    source: Source,
+    *,
+    rows: Optional[Sequence[str]] = None,
+    cols: Optional[Sequence[str]] = None,
+    values: Optional[str] = None,
+    agg: Optional[str] = None,
+    filters: Optional[Sequence[Filter]] = None,
+    sensitivity: float = 0.5,
+    max_findings: int = 15,
+    max_pairs: int = 5,
+    max_rows: int = 40,
+    max_cols: int = 12,
+    layers: int = 2,
+    aspect: Optional[float] = None,
+    memory_budget_mb: Optional[float] = None,
+    columns: Optional[Sequence[str]] = None,
+    **opts: Any,
+) -> Dict[str, Any]:
+    """A rich, local, non-LLM analysis of the (optionally filtered/laid-out) data:
+    column summaries (kind, semantic type, distribution, cardinality), and ranked
+    findings - skew, a mixture-model check for multiple populations in one numeric
+    column, concentration, outliers, correlated column pairs, and (when a 2-D layout is
+    available) the most surprising cells.
+
+    Nothing here calls a model: every score is a plain, deterministic computation, cheap
+    enough to call again after every new ``filters``. ``sensitivity`` (0..1, default
+    0.5) sets how much of the ranked findings list surfaces - higher shows more
+    (including weaker findings), lower shows only the strongest; it is not a
+    "temperature" (no sampling is involved, so that word would be misleading here).
+    ``rows``/``cols``/``values``/``agg`` are optional - leave them unset and a layout is
+    still auto-fitted, purely so the surprising-cell check has a 2-D table to look at.
+    """
+    from . import fit as _fit
+
+    v = _fit(
+        source,
+        rows=list(rows) if rows is not None else None,
+        cols=list(cols) if cols is not None else None,
+        values=values,
+        agg=agg,
+        max_rows=max_rows,
+        max_cols=max_cols,
+        layers=layers,
+        aspect=aspect,
+        memory_budget_mb=memory_budget_mb,
+        columns=columns,
+        **opts,
+    )
+    v = _apply_filters(v, filters)
+    return v.insights(sensitivity=sensitivity, max_findings=max_findings, max_pairs=max_pairs)
+
+
 def suggest(
     source: Source,
     n: int = 5,
@@ -366,4 +419,4 @@ def slicers(
     return {col: [{"value": val, "count": int(c)} for val, c in vals] for col, vals in raw.items()}
 
 
-__all__ = ["describe", "pivot", "llm_context", "suggest", "slicers", "anomalies", "FILTER_OPS"]
+__all__ = ["describe", "pivot", "llm_context", "insights", "suggest", "slicers", "anomalies", "FILTER_OPS"]

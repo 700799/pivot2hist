@@ -38,9 +38,12 @@ server = _Server(
         "suggest() for alternative layouts and slicers() for values to filter on. Prefer "
         "llm_context() over pivot() when you're about to reason over or quote the result "
         "yourself, rather than hand it to other code - it returns a natural-language "
-        "description and a markdown table instead of raw JSON rows. Files are surveyed "
-        "against available memory and streamed page by page when too large to hold in "
-        "memory, so any source can be passed directly by path."
+        "description and a markdown table instead of raw JSON rows. Call insights() when "
+        "the question is 'what's actually interesting here' rather than a specific "
+        "cross-tab - it's a local, non-LLM statistical pass (distributions, skew, "
+        "correlated columns, surprising cells) over whatever filters you've applied. "
+        "Files are surveyed against available memory and streamed page by page when too "
+        "large to hold in memory, so any source can be passed directly by path."
     ),
 )
 
@@ -120,6 +123,33 @@ def llm_context(
         source, rows=rows, cols=cols, values=values, agg=agg, filters=filters, mode=mode,
         on=on, by=by, bins=bins, max_rows=max_rows, max_cols=max_cols,
         table_max_rows=table_max_rows, table_max_cols=table_max_cols, memory_budget_mb=memory_budget_mb,
+    )
+
+
+@server.tool()
+def insights(
+    source: str,
+    rows: Optional[List[str]] = None,
+    cols: Optional[List[str]] = None,
+    values: Optional[str] = None,
+    agg: Optional[str] = None,
+    filters: Optional[List[Dict[str, Any]]] = None,
+    sensitivity: float = 0.5,
+    max_findings: int = 15,
+    memory_budget_mb: Optional[float] = None,
+) -> Dict[str, Any]:
+    """A rich, local, non-LLM analysis of the data (optionally filtered): column
+    summaries (kind, semantic type, best-fit distribution, cardinality) plus ranked
+    findings - skew, a mixture-model check for multiple populations in one numeric
+    column, concentration, outliers, correlated column pairs, and surprising pivot
+    cells. Every score is a deterministic computation over the data itself, not a model
+    call. sensitivity (0..1, default 0.5) controls how much of the ranked list surfaces:
+    higher shows more (including weaker findings), lower shows only the strongest. Call
+    this instead of - or after - pivot() when the question is "what's actually
+    interesting in this data" rather than "show me this specific cross-tab"."""
+    return _agent.insights(
+        source, rows=rows, cols=cols, values=values, agg=agg, filters=filters,
+        sensitivity=sensitivity, max_findings=max_findings, memory_budget_mb=memory_budget_mb,
     )
 
 

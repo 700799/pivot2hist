@@ -373,3 +373,41 @@ def test_checkpoint_playback_widget_linked(ex):
     ex.save_checkpoint("one")
     ex.save_checkpoint("two")
     assert ex.w_timeline_play.max == ex.w_timeline_slider.max == 1
+
+
+def test_insights_tab_present(ex):
+    assert ex.tabs.get_title(ex.INSIGHTS_TAB) == "Insights"
+
+
+def test_calculate_populates_insights_tab(ex):
+    assert "click Calculate" in ex.w_insights.value
+    report = ex.calculate()
+    assert set(report) == {"summary", "shape", "columns", "findings", "sensitivity"}
+    assert "<table" in ex.w_insights.value or "nothing crossed" in ex.w_insights.value
+
+
+def test_calculate_uses_slider_sensitivity_by_default(ex):
+    ex.w_sensitivity.value = 0.1
+    ex.calculate()
+    assert ex._insights_report["sensitivity"] == 0.1
+
+
+def test_calculate_with_explicit_sensitivity_syncs_slider(ex):
+    ex.calculate(sensitivity=0.9)
+    assert ex.w_sensitivity.value == 0.9
+    assert ex._insights_report["sensitivity"] == 0.9
+
+
+def test_insights_goes_stale_after_view_changes_then_clears_on_recalculate(ex):
+    ex.calculate()
+    assert "view has changed" not in ex.w_insights.value
+    ex.w_rows.value = ("action",)
+    assert "view has changed" in ex.w_insights.value
+    ex.calculate()
+    assert "view has changed" not in ex.w_insights.value
+
+
+def test_insights_reflects_current_slice_in_explorer(ex, fw):
+    ex.w_slicers["action"][1].value = ("deny",)
+    report = ex.calculate()
+    assert report["shape"]["rows"] == (fw["action"] == "deny").sum()

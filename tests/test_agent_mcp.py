@@ -128,7 +128,7 @@ def test_mcp_tools_registered(mcp_server_module):
 
     tools = asyncio.run(mcp_server_module.server.list_tools())
     names = {t.name for t in tools}
-    assert names == {"describe", "pivot", "llm_context", "suggest", "slicers", "anomalies"}
+    assert names == {"describe", "pivot", "llm_context", "insights", "suggest", "slicers", "anomalies"}
     for t in tools:
         assert t.description and len(t.description) > 10
 
@@ -175,6 +175,42 @@ def test_mcp_llm_context_tool(mcp_server_module, tmp_path, fw):
     assert set(d) == {"description", "metadata", "table"}
     assert d["metadata"]["measure"] == "count"
     assert d["table"].startswith("|")
+
+
+def test_mcp_insights_tool(mcp_server_module, tmp_path, fw):
+    import asyncio
+
+    path = tmp_path / "fw.csv"
+    fw.to_csv(path, index=False)
+
+    async def run():
+        return await mcp_server_module.server.call_tool(
+            "insights", {"source": str(path), "sensitivity": 1.0}
+        )
+
+    r = asyncio.run(run())
+    d = json.loads(r.content[0].text)
+    assert set(d) == {"summary", "shape", "columns", "findings", "sensitivity"}
+    assert d["sensitivity"] == 1.0
+    assert d["findings"]
+
+
+def test_agent_insights(fw):
+    r = agent.insights(fw, sensitivity=1.0)
+    _assert_json_safe(r)
+    assert set(r) == {"summary", "shape", "columns", "findings", "sensitivity"}
+    assert r["shape"]["rows"] == len(fw)
+
+
+def test_agent_insights_respects_filters(fw):
+    full = agent.insights(fw)
+    sliced = agent.insights(fw, filters=[{"column": "action", "eq": "deny"}])
+    assert sliced["shape"]["rows"] < full["shape"]["rows"]
+
+
+def test_agent_insights_sensitivity_validated(fw):
+    with pytest.raises(ValueError):
+        agent.insights(fw, sensitivity=2.0)
 
 
 def test_agent_describe_distributions(fw):

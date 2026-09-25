@@ -1183,6 +1183,35 @@ class View:
 
         return _llm_context(self, max_rows=max_rows, max_cols=max_cols, notes=notes)
 
+    def insights(self, *, sensitivity: float = 0.5, max_findings: int = 15, max_pairs: int = 5) -> Dict[str, Any]:
+        """A rich, local, non-LLM analysis of *this view's currently-filtered data* -
+        every slice you've applied is already baked in, so re-slicing and calling this
+        again is exactly "recalculate on what I'm looking at now".
+
+        Every numeric/categorical/datetime column gets a summary (mean/median/std and
+        best-fit distribution for numeric; top value and its share for categorical/
+        boolean; range for datetime) in ``"columns"``. On top of that, ``"findings"`` is
+        a ranked list of what's actually notable: skew, a Gaussian-mixture check for
+        multiple distinct populations in one numeric column (the "mixle"-inspired bit -
+        see :mod:`pivot2hist._mixture`), how concentrated a category is versus an even
+        split, outlier share, near-constant columns, id-like cardinality, the most
+        mutually-informative column pairs, and - when the current layout is a real 2-D
+        pivot - the most surprising cells (see :meth:`anomalies`). Each finding carries
+        a 0..1 ``significance``; ``sensitivity`` (0..1, default 0.5) sets how much of
+        that ranked list actually surfaces - higher shows more (including weaker
+        findings), lower shows only the strongest. It's not called "temperature": this
+        is a deterministic computation over the data, not sampling from a model, and
+        that word would suggest a kind of randomness this doesn't have.
+
+        Cheap enough to call after every slice: distribution/mixture fits sample down to
+        20k rows, and nothing here is more expensive than the pivot itself. See
+        :func:`pivot2hist.insights` for the plain function and
+        :func:`pivot2hist.agent.insights` for the JSON-source version.
+        """
+        from ._insights import insights as _insights
+
+        return _insights(self, sensitivity=sensitivity, max_findings=max_findings, max_pairs=max_pairs)
+
     def _repr_html_(self) -> str:
         return self.html()
 

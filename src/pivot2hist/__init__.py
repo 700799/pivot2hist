@@ -40,7 +40,7 @@ from ._semantic import HIERARCHY, infer_semantic
 from ._survey import Machine, PagedSource, Plan, Survey, downcast, load_planned, survey
 from ._view import HIST, PIVOT, Derived, Filter, View
 
-__version__ = "0.12.1"
+__version__ = "0.13.0"
 
 _PLANNED_KEYS = ("memory_budget_mb", "mode", "columns", "query", "table", "sample_rows", "page_rows")
 
@@ -194,6 +194,30 @@ def llm_context(
     return v.llm_context(max_rows=max_rows, max_cols=max_cols, notes=notes)
 
 
+def insights(
+    data: Any,
+    *,
+    rows: Optional[Sequence[DimSpec]] = None,
+    cols: Optional[Sequence[DimSpec]] = None,
+    values: Optional[str] = None,
+    agg: Optional[str] = None,
+    sensitivity: float = 0.5,
+    max_findings: int = 15,
+    max_pairs: int = 5,
+    **opts: Any,
+) -> dict:
+    """A rich, local, non-LLM analysis of ``data`` (auto-fitted first, so a 2-D layout is
+    available for the surprising-cell check): column summaries, distributions, a
+    Gaussian-mixture modality check, skew, concentration, outliers, correlated column
+    pairs, and the most surprising pivot cells - ranked findings, not a raw dump.
+
+    Equivalent to ``p2h.fit(data, ...).insights(...)``; see :meth:`View.insights` for
+    what ``sensitivity`` controls and why it isn't called "temperature".
+    """
+    v = fit(data, rows=rows, cols=cols, values=values, agg=agg, **opts)
+    return v.insights(sensitivity=sensitivity, max_findings=max_findings, max_pairs=max_pairs)
+
+
 def explore(data: Any, **kw: Any) -> Any:
     """Interactive Jupyter explorer (needs ``ipywidgets``): menus to alter, slice, best-fit,
     reduce and cluster, with heatmap pivots and SVG histograms."""
@@ -293,7 +317,7 @@ def dependencies(data: Any, columns: Optional[Sequence[str]] = None, *, bins: in
 
 __all__ = [
     "fit", "pivot", "histogram", "profile", "load", "suggest", "explore", "cluster", "chains", "regimes", "dependencies",
-    "llm_context",
+    "llm_context", "insights",
     "survey", "load_planned", "downcast", "stats", "verbose", "log", "distribution",
     "sequences", "transitions", "transition_matrix", "steady_state",
     "View", "Layout", "Dim", "FitOptions", "Filter", "Derived", "Profile", "ColumnProfile",

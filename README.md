@@ -32,6 +32,7 @@ p2h.regimes(df, "event", by="user", time="timestamp")  # HMM-decoded behavioural
 p2h.dependencies(df)               # which columns move together, as a pivot (mutual information)
 p2h.verbose(); p2h.stats(7)        # scrolling step log; the seven costliest steps
 v.llm_context()                    # description + metadata + a markdown table, sized for a model's context
+v.insights()                       # rich local summary: distributions, mixtures, anomalies, ranked findings — no LLM
 p2h.agent.pivot("firewall.csv", rows=["src_ip"], filters=[{"column": "action", "eq": "deny"}])  # plain JSON, for LLM agents
 ```
 
@@ -526,6 +527,51 @@ p2h.rank_distributions(df["duration"])     # every family that fits, best first
 the alternatives are genuinely close and worth a look, not a formality.
 `v.suggest_ranked(n)` keeps the raw score next to each `Layout`.
 
+## Insights: a rich, local summary
+
+`v.insights()` puts distributions, mixtures, anomalies and dependencies together into one
+ranked answer to "what's actually interesting in the data I'm looking at right now" —
+every slice already applied, nothing sent anywhere, no model call:
+
+```python
+v = p2h.fit("firewall.csv").slice(action="deny")
+report = v.insights()
+report["summary"]      # "4,000 rows x 11 columns (8 categorical, 2 numeric, 1 datetime). 6 notable finding(s) ..."
+report["columns"]      # per-column: kind, semantic type, cardinality, and (numeric) mean/median/std/best-fit distribution
+report["findings"]     # ranked list: {"kind", "columns", "significance", "text"}
+p2h.insights(df, rows=["src_ip"])   # the plain function, auto-fits first
+```
+
+Each finding is one of: **skew** (median beats mean as a summary here), **modality** (a
+Gaussian-mixture check — the same from-scratch EM as `v.modes()` — for a numeric column
+that's really two or more distinct populations, not one: the "mixle"-inspired piece),
+**concentration** (a category far more dominant than an even split would predict),
+**outliers** (share of values outside 1.5x IQR), **constant** (near-zero variation, using
+the middle 80% of the data so a couple of extreme outliers on an otherwise skewed column
+can't make it misread as constant), **high_cardinality** (variety close to an id, on a
+column the profiler didn't already call one), **correlation** (the most mutually-
+informative column pairs — see `p2h.dependencies()`), and **anomaly** (the most surprising
+cells of the current pivot, when there is one — see `v.anomalies()`).
+
+`sensitivity` (0..1, default 0.5) is the only knob: each finding carries a 0..1
+significance, and `sensitivity` sets where the cutoff falls — 0 surfaces only the
+strongest one or two, 1 surfaces everything that crosses any bar at all. It's
+deliberately not called "temperature": every score here is a plain, deterministic
+computation over the data (skewness, a percentile-based spread ratio, normalized mutual
+information, BIC...), not sampling from a model, and that word would suggest a kind of
+randomness this doesn't have.
+
+```python
+v.insights(sensitivity=0.2)   # just the headline findings
+v.insights(sensitivity=0.9)   # everything worth a look, including the marginal stuff
+```
+
+Cheap enough to call again after every new slice — the expensive parts (distribution and
+mixture fitting) sample down to 20k rows — which is exactly the point: **Calculate** it
+once in the explorer's **Insights** tab, then whenever you slice further, hit
+**Calculate** again to recompute on the narrower data ("recalculate" is just calling this
+again).
+
 ## Jupyter explorer
 
 ```python
@@ -648,21 +694,57 @@ agent.llm_context("events.parquet", rows=["src_ip"], cols=["action"])
 Prefer `pivot()` when the result feeds back into your own code; prefer `llm_context()`
 when it's headed into a model's context window instead.
 
-**MCP server** (`pip install "pivot2hist[mcp]"`) exposes the same operations to any
-MCP client — Claude Code, Claude Desktop, or your own agent:
+**MCP server**: `pivot2hist-mcp` exposes the same operations to any MCP client — Claude
+Code, Claude Desktop, or your own agent — over stdio: the client spawns it as a local
+subprocess and talks to it over stdin/stdout, exactly like `npx`-launched Node MCP
+servers do, just with Python's own zero-persistent-install tools instead of `npx`. No
+server to host, no port to open, no npm/Node involved at all.
 
 ```
-pivot2hist-mcp                    # stdio server; add it to your MCP client's config
-python -m pivot2hist.mcp_server   # the same thing
+uvx --from "pivot2hist[mcp]" pivot2hist-mcp     # zero install: uv fetches, runs, discards
+pipx run --spec "pivot2hist[mcp]" pivot2hist-mcp  # same idea, via pipx
+pip install "pivot2hist[mcp]" && pivot2hist-mcp   # or install it properly, if you'll use it a lot
 ```
+
+Point your MCP client at whichever of those you prefer. For Claude Code, a project-level
+`.mcp.json` (this repo ships one at its root — copy it into your own project, or use it
+as-is by working from a clone) — or Claude Desktop's `claude_desktop_config.json`, same
+shape under `mcpServers`:
+
+```json
+{
+  "mcpServers": {
+    "pivot2hist": {
+      "command": "uvx",
+      "args": ["--from", "pivot2hist[mcp]", "pivot2hist-mcp"]
+    }
+  }
+}
+```
+
+**Why local/stdio instead of a hosted server**: your data never leaves the machine — the
+subprocess reads files directly off disk, nothing is uploaded anywhere, which matters
+a lot for the cyber logs this library targets. There's no server to stand up, secure,
+or pay to keep running, and no network hop, so it's as fast as the analysis itself and
+still works fully offline. The MCP client owns the subprocess's lifetime directly (it
+starts it, and kills it when the session ends), which is a simpler trust boundary than
+a long-lived service would be.
 
 Tools: `describe(source, columns=, memory_budget_mb=, distributions=)`,
 `pivot(source, rows=, cols=, values=, agg=, filters=, mode=, on=, by=, bins=, max_rows=,
 max_cols=, memory_budget_mb=)`, `llm_context(...)` (same arguments as `pivot`, plus
-`table_max_rows=`/`table_max_cols=`), `suggest(source, n=, filters=)`,
-`slicers(source, columns=, top=)`, `anomalies(source, n=, rows=, cols=, filters=)`.
-Works against both `mcp<2` (`FastMCP`) and `mcp>=2` (`MCPServer`) — whichever is
-installed.
+`table_max_rows=`/`table_max_cols=`), `insights(source, rows=, cols=, values=, agg=,
+filters=, sensitivity=, max_findings=, memory_budget_mb=)`, `suggest(source, n=,
+filters=)`, `slicers(source, columns=, top=)`, `anomalies(source, n=, rows=, cols=,
+filters=)`. Works against both `mcp<2` (`FastMCP`) and `mcp>=2` (`MCPServer`) —
+whichever is installed.
+
+You can also just run it directly, no client needed:
+
+```
+pivot2hist-mcp                    # stdio server; what the config above launches
+python -m pivot2hist.mcp_server   # the same thing
+```
 
 ## Loading data
 
@@ -740,3 +822,28 @@ unique, DuckDB's engine for DuckDB sources) and the search is bounded by samplin
 pip install -e ".[dev,jupyter,parquet,duckdb,mcp]"
 pytest
 ```
+
+## Publishing a release
+
+Plain `pandas`/`numpy` + `setuptools` (already the build backend in `pyproject.toml`) is
+enough for PyPI — no Poetry migration needed, and definitely no Node/npm (that's a
+separate ecosystem for JavaScript packages; this is a pure-Python one, installed and run
+entirely with `pip`/`pipx`/`uv`).
+
+**One-time setup**, before the first release: on [pypi.org](https://pypi.org), under the
+project's *Publishing* settings, add a **trusted publisher** — GitHub owner `700799`,
+repository `pivot2hist`, workflow `publish.yml`, environment `pypi`. This lets GitHub
+Actions authenticate to PyPI via OIDC with no API token to create, store in a secret, or
+rotate later.
+
+**Every release** after that:
+
+```
+# bump version in both pyproject.toml and src/pivot2hist/__init__.py (kept in sync)
+git tag v0.13.0 && git push --tags
+# then, on GitHub: Releases -> Draft a new release -> pick the tag -> Publish
+```
+
+Publishing the GitHub release triggers `.github/workflows/publish.yml`, which builds the
+wheel/sdist and pushes them to PyPI. `python -m build` + `twine upload dist/*` still work
+by hand if you'd rather not wait on that workflow, but need a PyPI API token in that case.
