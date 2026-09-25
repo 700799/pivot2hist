@@ -526,7 +526,14 @@ def _hashable_column(s: pd.Series) -> pd.Series:
         pd.unique(s.dropna().to_numpy(dtype=object))
         return s
     except TypeError:
-        return s.astype(str)
+        na = s.isna()
+        out = s.astype(str)
+        if na.any():
+            # astype(str)'s null handling for a mixed unhashable/None object column isn't
+            # consistent across pandas versions (pandas < 3 stringifies None to "None"
+            # instead of leaving it null) - restore the original null mask explicitly.
+            out = out.mask(na)
+        return out
 
 
 def categorize(
