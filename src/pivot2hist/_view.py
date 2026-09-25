@@ -1088,6 +1088,24 @@ class View:
             raise KeyError(f"unknown column {column!r}")
         return fit_distribution(self.data[column], **kw)
 
+    def modes(self, column: str, k: Optional[int] = None, **kw: Any) -> Optional[List[Dict[str, Any]]]:
+        """How many peaks does this numeric column have, and where? A Gaussian mixture
+        fit (component count chosen by BIC unless ``k`` is given), reported as a list of
+        ``{"weight", "mean", "std"}`` dicts sorted by mean — e.g. two components at
+        ~200 B and ~5 KB for a bimodal transfer-size column. ``None`` if there isn't
+        enough data. See :func:`pivot2hist.modes`."""
+        from ._mixture import choose_gmm_k, fit_gmm
+
+        if column not in self.data.columns:
+            raise KeyError(f"unknown column {column!r}")
+        x = pd.to_numeric(self.data[column], errors="coerce").to_numpy(dtype=float)
+        x = x[np.isfinite(x)]
+        if x.size < 8:
+            return None
+        kk = k if k is not None else choose_gmm_k(x.reshape(-1, 1), **kw)
+        fit = fit_gmm(x.reshape(-1, 1), max(1, kk), **{k2: v for k2, v in kw.items() if k2 != "k_max"})
+        return fit.components()
+
     def anomalies(self, n: int = 10) -> pd.DataFrame:
         """The ``n`` most surprising cells: biggest deviation from what independence of
         the row and column axes would predict (``row_total x col_total / grand_total``),

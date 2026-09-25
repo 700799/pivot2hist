@@ -24,7 +24,7 @@ from pandas.api import types as pdt
 from ._log import log
 
 NOISE = "noise"
-METHODS = ("kmeans", "dbscan", "hdbscan")
+METHODS = ("kmeans", "dbscan", "hdbscan", "gmm")
 COMETHODS = ("spectral", "mcl")
 
 
@@ -228,6 +228,14 @@ def hdbscan_labels(X: np.ndarray, min_cluster_size: Optional[int] = None, *, see
     return dbscan(X, min_samples=max(3, min(mcs, 10)), seed=seed), "dbscan (fallback)"
 
 
+def gmm_labels(X: np.ndarray, k: Optional[int], *, seed: int = 0) -> np.ndarray:
+    """Hard assignment (highest-responsibility component) from a fitted Gaussian mixture."""
+    from ._mixture import choose_gmm_k, fit_gmm
+
+    kk = k if k is not None else choose_gmm_k(X, k_max=8, seed=seed)
+    return fit_gmm(X, max(1, kk), seed=seed).predict(X)
+
+
 def cluster_labels(X: np.ndarray, k: Optional[int], method: str = "kmeans", *, seed: int = 0) -> Tuple[np.ndarray, str]:
     """Dispatch to a method; returns ``(labels, backend)``. ``-1`` marks noise."""
     if method == "kmeans":
@@ -237,6 +245,8 @@ def cluster_labels(X: np.ndarray, k: Optional[int], method: str = "kmeans", *, s
         return dbscan(X, min_samples=max(3, k or 5), seed=seed), "dbscan"
     if method == "hdbscan":
         return hdbscan_labels(X, k, seed=seed)
+    if method == "gmm":
+        return gmm_labels(X, k, seed=seed), "gmm"
     raise ValueError(f"unknown method {method!r}; use one of {METHODS}")
 
 
@@ -463,5 +473,5 @@ def cocluster(table: pd.DataFrame, k: Optional[int] = None, *, method: str = "sp
     return rows, cols
 
 
-__all__ = ["kmeans", "choose_k", "silhouette", "standardize", "dbscan", "auto_eps", "hdbscan_labels", "cluster_labels",
+__all__ = ["kmeans", "choose_k", "silhouette", "standardize", "dbscan", "auto_eps", "hdbscan_labels", "gmm_labels", "cluster_labels",
            "cluster_frame", "cluster_rows", "cocluster", "spectral_cocluster", "mcl", "mcl_cocluster", "METHODS", "COMETHODS", "NOISE"]

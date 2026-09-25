@@ -28,6 +28,7 @@ from ._chains import sequences, steady_state, transition_matrix, transitions
 from ._cluster import COMETHODS, METHODS, cluster_frame, cluster_rows, cocluster, dbscan, kmeans
 from ._density import DistFit, fit_distribution, rank_distributions
 from ._density import FAMILIES as DIST_FAMILIES
+from ._mixture import GMMFit, choose_gmm_k, fit_gmm, mixture_cutpoints
 from ._fit import AGGS, DEFAULT_WEIGHTS, Dim, DimSpec, FitOptions, Layout, build_table, fit_layout, suggest_layouts
 from ._io import load
 from ._log import log, stats, verbose
@@ -37,7 +38,7 @@ from ._semantic import HIERARCHY, infer_semantic
 from ._survey import Machine, PagedSource, Plan, Survey, downcast, load_planned, survey
 from ._view import HIST, PIVOT, Derived, Filter, View
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 _PLANNED_KEYS = ("memory_budget_mb", "mode", "columns", "query", "table", "sample_rows", "page_rows")
 
@@ -141,6 +142,26 @@ def distribution(data: Any, column: str, **kw: Any):
     return fit_distribution(df[column], **kw)
 
 
+def modes(data: Any, column: str, k: Optional[int] = None, **kw: Any) -> Optional[list]:
+    """How many peaks does this numeric column have, and where? A Gaussian mixture fit
+    (component count chosen by BIC unless ``k`` is given), as a list of
+    ``{"weight", "mean", "std"}`` dicts sorted by mean, or ``None`` if there isn't enough
+    data. No scipy/sklearn: EM from scratch, see :mod:`pivot2hist._mixture`.
+    """
+    df = load(data)
+    if column not in df.columns:
+        raise KeyError(f"unknown column {column!r}")
+    import numpy as _np
+
+    x = _np.asarray(df[column], dtype=float)
+    x = x[_np.isfinite(x)]
+    if x.size < 8:
+        return None
+    kk = k if k is not None else choose_gmm_k(x.reshape(-1, 1), **kw)
+    fit = fit_gmm(x.reshape(-1, 1), max(1, kk), **{k2: v for k2, v in kw.items() if k2 != "k_max"})
+    return fit.components()
+
+
 def explore(data: Any, **kw: Any) -> Any:
     """Interactive Jupyter explorer (needs ``ipywidgets``): menus to alter, slice, best-fit,
     reduce and cluster, with heatmap pivots and SVG histograms."""
@@ -197,5 +218,6 @@ __all__ = [
     "build_table", "fit_layout", "suggest_layouts", "bin_edges", "bin_count", "bin_labels", "kde",
     "cluster_frame", "cluster_rows", "cocluster", "kmeans", "dbscan", "METHODS", "COMETHODS",
     "infer_semantic", "HIERARCHY", "DEFAULT_WEIGHTS", "fit_distribution", "rank_distributions", "DIST_FAMILIES",
+    "modes", "GMMFit", "fit_gmm", "choose_gmm_k", "mixture_cutpoints",
     "RULES", "AGGS", "PIVOT", "HIST", "sample", "agent", "__version__",
 ]

@@ -20,7 +20,7 @@ OTHER = "(other)"
 NULL = "(null)"
 
 BinRule = Union[str, int]
-RULES = ("auto", "fd", "sturges", "scott", "sqrt", "rice", "kmeans", "quantile")
+RULES = ("auto", "fd", "sturges", "scott", "sqrt", "rice", "kmeans", "quantile", "mixture")
 _COUNT_RULES = ("auto", "fd", "sturges", "scott", "sqrt", "rice")
 
 _NICE_FLOAT = (1.0, 2.0, 2.5, 5.0, 10.0)
@@ -47,7 +47,7 @@ def bin_count(values, rule: BinRule = "auto") -> int:
     """
     if isinstance(rule, (int, np.integer)) and not isinstance(rule, bool):
         return max(1, int(rule))
-    if rule in ("kmeans", "quantile"):
+    if rule in ("kmeans", "quantile", "mixture"):
         rule = "auto"  # placement rules use the auto count
     v = _clean(values)
     n = v.size
@@ -205,6 +205,8 @@ def bin_edges(
         return quantile_edges(v, n, integer=integer)
     if rule == "kmeans":
         return natural_breaks(v, n, integer=integer)
+    if rule == "mixture":
+        return mixture_breaks(v, n, integer=integer)
     if should_log(v, scale):
         pos = v[v > 0]
         has_zero = pos.size < v.size
@@ -276,6 +278,37 @@ def natural_breaks(values, n_bins: int, *, integer: bool = False, seed: int = 0)
         lo_b = x[labels == b].min()
         cuts.append((hi_a + lo_b) / 2.0)
     cuts = np.array(cuts)
+    if x is not sample:
+        cuts = np.expm1(cuts)
+    edges = np.concatenate([[v.min()], cuts, [v.max()]])
+    edges = np.round(edges) if integer else _round_sig(edges)
+    return _dedupe_edges(edges, float(v.min()), float(v.max()), integer)
+
+
+def mixture_breaks(values, n_bins: int, *, integer: bool = False, seed: int = 0) -> np.ndarray:
+    """Bins from a fitted Gaussian mixture (:mod:`._mixture`): the component count is
+    chosen by BIC (capped at ``n_bins``) and cuts fall at the valley between adjacent
+    modes' densities, rather than at the midpoint between their centres (as
+    :func:`natural_breaks`'s hard k-means split does) or at an arbitrary equal width.
+    Best on data with a handful of real, separated modes; degrades to one wide bin per
+    mode's spread when the data isn't actually multi-modal."""
+    from ._mixture import choose_gmm_k, fit_gmm, mixture_cutpoints
+
+    v = _clean(values)
+    if v.size == 0:
+        return np.array([0.0, 1.0])
+    n_bins = max(1, int(n_bins))
+    uniq = np.unique(v)
+    if uniq.size <= n_bins:
+        edges = np.concatenate([uniq, [uniq[-1] + (1.0 if integer else 0.0)]])
+        return _dedupe_edges(edges, float(v.min()), float(v.max()), integer)
+    sample = v if v.size <= 20000 else np.random.default_rng(seed).choice(v, 20000, replace=False)
+    x = np.log1p(sample) if sample.min() >= 0 and should_log(sample, "auto") else sample
+    k = choose_gmm_k(x.reshape(-1, 1), k_max=n_bins, seed=seed)
+    if k <= 1:
+        return linear_edges(float(v.min()), float(v.max()), n_bins, integer=integer)
+    fit = fit_gmm(x.reshape(-1, 1), k, seed=seed)
+    cuts = mixture_cutpoints(fit)
     if x is not sample:
         cuts = np.expm1(cuts)
     edges = np.concatenate([[v.min()], cuts, [v.max()]])
