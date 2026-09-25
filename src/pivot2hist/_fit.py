@@ -72,6 +72,16 @@ class FitOptions:
         cyclic time buckets (hour of day, weekday) as alternative dimensions.
     max_categories / discrete_max / id_ratio:
         Profiling thresholds, see :func:`pivot2hist.profile`.
+    engine:
+        ``"pandas"`` (default) or ``"duckdb"``: run the group-by/aggregate that builds
+        the table as SQL against DuckDB instead of ``pandas.pivot_table``, for dims it
+        can express in SQL (categorical, binned, plain time buckets), falling back to
+        pandas per-layout for the rest (semantic drill levels, cyclic time). Same results
+        either way - this is about SQL semantics/interop with a DuckDB-based pipeline,
+        not a guaranteed speedup: pandas' own vectorized pivot is already fast for an
+        in-memory frame, and registering one with DuckDB has its own cost (amortized
+        across repeated queries on the same frame, but still paid on the first one).
+        Needs the ``duckdb`` package.
     """
 
     max_rows: int = 40
@@ -95,6 +105,7 @@ class FitOptions:
     discrete_max: int = 20
     id_ratio: float = 0.5
     seed: int = 0
+    engine: str = "pandas"
 
     @property
     def target_aspect(self) -> float:
@@ -935,18 +946,53 @@ def freeze(layout: Layout, df: pd.DataFrame) -> Layout:
 
 
 
-def build_table(
-    df: pd.DataFrame,
-    layout: Layout,
+def _finish_table(
+    frame: pd.DataFrame,
+    row_keys: List[str],
+    col_keys: List[str],
+    vname: str,
+    agg: str,
+    measure: str,
     *,
-    observed: bool = True,
-    fill: bool = True,
+    observed: bool,
+    fill: bool,
+    reshape_agg: Optional[str] = None,
 ) -> pd.DataFrame:
-    """Pivot ``df`` according to ``layout``.
+    """Reshape a (row keys, col keys, value) long frame into the wide pivot table.
 
-    ``observed=False`` keeps every planned level (all bins, all top-N values), which the
-    histogram view wants; ``observed=True`` keeps only combinations present in the data.
+    ``reshape_agg`` is the aggfunc actually run by ``pivot_table`` here; it defaults to
+    ``agg``, which is correct when ``frame`` still has one row per *source* row (the
+    pandas materialize path: this call is the only real aggregation that happens). A
+    caller whose ``frame`` is already pre-aggregated to one row per (row, col) combo (the
+    DuckDB path) must pass ``reshape_agg="first"`` - re-running e.g. "count" or "nunique"
+    on a singleton group doesn't pass the precomputed value through, it recomputes count/
+    nunique *of that one row* (always 1, silently wrong). ``agg`` still governs
+    ``fill_value`` either way: it reflects what the numbers mean, not how they got here.
     """
+    if frame.empty:
+        idx = pd.MultiIndex.from_arrays([[] for _ in row_keys], names=row_keys) if len(row_keys) > 1 else pd.Index([], name=row_keys[0] if row_keys else None)
+        return pd.DataFrame(index=idx)
+    fill_value: Any = 0 if (fill and agg in ("sum", "count", "nunique")) else None
+    table = pd.pivot_table(
+        frame,
+        index=row_keys,
+        columns=col_keys or None,
+        values=vname,
+        aggfunc=reshape_agg or agg,
+        observed=observed,
+        dropna=observed,  # pivot: only observed combos; hist: keep empty bins (gaps matter)
+        fill_value=fill_value,
+    )
+    if isinstance(table, pd.Series):
+        table = table.to_frame(vname)
+    if not col_keys:
+        table.columns = [measure]
+        table.columns.name = None
+    return table
+
+
+def _materialize_table(df: pd.DataFrame, layout: Layout) -> Tuple[pd.DataFrame, List[str], List[str], str, str]:
+    """Pandas path: materialize every dim over the whole frame, one column per dim."""
     work: Dict[str, pd.Series] = {}
     row_keys: List[str] = []
     col_keys: List[str] = []
@@ -974,24 +1020,34 @@ def build_table(
         elif not pdt.is_numeric_dtype(v) and agg in ("sum", "mean", "min", "max", "median", "std"):
             raise ValueError(f"cannot {agg} non-numeric column {layout.values!r}; use agg='count' or 'nunique'")
         work[vname] = v
-    frame = pd.DataFrame(work, index=df.index)
-    if frame.empty:
-        idx = pd.MultiIndex.from_arrays([[] for _ in row_keys], names=row_keys) if len(row_keys) > 1 else pd.Index([], name=row_keys[0] if row_keys else None)
-        return pd.DataFrame(index=idx)
-    fill_value: Any = 0 if (fill and agg in ("sum", "count", "nunique")) else None
-    table = pd.pivot_table(
-        frame,
-        index=row_keys,
-        columns=col_keys or None,
-        values=vname,
-        aggfunc=agg,
-        observed=observed,
-        dropna=observed,  # pivot: only observed combos; hist: keep empty bins (gaps matter)
-        fill_value=fill_value,
-    )
-    if isinstance(table, pd.Series):
-        table = table.to_frame(vname)
-    if not col_keys:
-        table.columns = [layout.measure]
-        table.columns.name = None
-    return table
+    return pd.DataFrame(work, index=df.index), row_keys, col_keys, vname, agg
+
+
+def build_table(
+    df: pd.DataFrame,
+    layout: Layout,
+    *,
+    observed: bool = True,
+    fill: bool = True,
+    engine: str = "pandas",
+) -> pd.DataFrame:
+    """Pivot ``df`` according to ``layout``.
+
+    ``observed=False`` keeps every planned level (all bins, all top-N values), which the
+    histogram view wants; ``observed=True`` keeps only combinations present in the data.
+    ``engine="duckdb"`` pushes the scan + group-by + aggregate into DuckDB's vectorized
+    engine instead of pandas, for dims it can express in SQL (falls back to pandas per
+    layout otherwise - a semantic drill level or a cyclic time bucket stay Python-side).
+    """
+    if engine == "duckdb":
+        from . import _duckdb_engine as ddb
+
+        pushed = ddb.aggregate(df, layout, observed=observed)
+        if pushed is not None:
+            frame, row_keys, col_keys, vname, agg = pushed
+            return _finish_table(frame, row_keys, col_keys, vname, agg, layout.measure,
+                                  observed=observed, fill=fill, reshape_agg="first")
+    elif engine != "pandas":
+        raise ValueError(f"unknown engine {engine!r}; use 'pandas' or 'duckdb'")
+    frame, row_keys, col_keys, vname, agg = _materialize_table(df, layout)
+    return _finish_table(frame, row_keys, col_keys, vname, agg, layout.measure, observed=observed, fill=fill)

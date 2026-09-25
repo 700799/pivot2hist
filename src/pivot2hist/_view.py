@@ -404,7 +404,7 @@ class View:
                 if self._paged is not None:
                     self._cache["pivot"] = self._paged_table(observed=True)
                 else:
-                    self._cache["pivot"] = build_table(self.data, self._layout, observed=True)
+                    self._cache["pivot"] = build_table(self.data, self._layout, observed=True, engine=self._options.engine)
                 st.detail += f" -> {self._cache['pivot'].shape[0]} x {self._cache['pivot'].shape[1]}"
         return self._cache["pivot"]
 
@@ -415,7 +415,7 @@ class View:
                 if self._paged is not None:
                     t = self._paged_table(observed=False)
                 else:
-                    t = build_table(self.data, self._layout, observed=False)
+                    t = build_table(self.data, self._layout, observed=False, engine=self._options.engine)
                 self._cache["bins"] = self._trim(t)
         return self._cache["bins"]
 
@@ -434,7 +434,7 @@ class View:
         if layout.values is not None and agg not in EXACT_AGGS:
             self._cache["approx"] = True
             log.info("pivot", f"{agg} cannot be combined across pages: computed on the {len(self.data):,}-row sample")
-            return build_table(self.data, layout, observed=observed)
+            return build_table(self.data, layout, observed=observed, engine=self._options.engine)
         mean = layout.values is not None and agg == "mean"
         sum_layout = _replace(layout, agg="sum") if mean else layout
         cnt_layout = _replace(layout, agg="count") if mean else None
@@ -448,12 +448,12 @@ class View:
             seen += len(page)
             if page.empty:
                 continue
-            sums.append(build_table(page, sum_layout, observed=observed))
+            sums.append(build_table(page, sum_layout, observed=observed, engine=self._options.engine))
             if cnt_layout is not None:
-                cnts.append(build_table(page, cnt_layout, observed=observed))
+                cnts.append(build_table(page, cnt_layout, observed=observed, engine=self._options.engine))
         self._cache["paged_rows"] = seen
         if not sums:
-            return build_table(self.data.iloc[0:0], layout, observed=observed)
+            return build_table(self.data.iloc[0:0], layout, observed=observed, engine=self._options.engine)
         how = {"sum": "sum", "count": "sum", "min": "min", "max": "max", "mean": "sum"}[agg]
         total = self._combine(sums, how)
         if mean:

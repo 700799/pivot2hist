@@ -40,7 +40,7 @@ from ._semantic import HIERARCHY, infer_semantic
 from ._survey import Machine, PagedSource, Plan, Survey, downcast, load_planned, survey
 from ._view import HIST, PIVOT, Derived, Filter, View
 
-__version__ = "0.7.0"
+__version__ = "0.8.0"
 
 _PLANNED_KEYS = ("memory_budget_mb", "mode", "columns", "query", "table", "sample_rows", "page_rows")
 
@@ -84,7 +84,8 @@ def fit(
 
     Fix any of ``rows``/``cols``/``values``/``agg`` and the rest is chosen for you.
     Keyword options (``max_rows``, ``max_cols``, ``layers``, ``aspect``, ``bins``,
-    ``scale`` ...) are :class:`FitOptions` fields.
+    ``scale``, ``engine`` ...) are :class:`FitOptions` fields - ``engine="duckdb"`` runs
+    the table build as SQL against DuckDB instead of pandas (needs the ``duckdb`` package).
 
     Files and DuckDB sources are surveyed first (rows, size on disk, estimated memory
     against the machine's RAM); too-big data is fitted on a sample and aggregated page by
