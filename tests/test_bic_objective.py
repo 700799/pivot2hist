@@ -1,7 +1,5 @@
 import math
 
-import numpy as np
-import pandas as pd
 import pytest
 
 import pivot2hist as p2h

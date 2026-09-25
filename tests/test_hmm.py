@@ -23,7 +23,6 @@ def test_fit_hmm_recovers_two_regimes():
     assert np.allclose(fit.A.sum(axis=1), 1.0) and np.allclose(fit.B.sum(axis=1), 1.0)
     assert abs(fit.pi.sum() - 1.0) < 1e-9
     # the two states should specialise: one mostly login_success, the other mostly logout
-    idx = {s: i for i, s in enumerate(fit.symbols)}
     top_symbol = [fit.symbols[np.argmax(fit.B[i])] for i in range(2)]
     assert set(top_symbol) == {"login_success", "logout"}
 

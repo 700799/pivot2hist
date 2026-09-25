@@ -171,6 +171,42 @@ def test_fields_slicers_zone_mirrors_widget(ex, fw):
     assert len(ex.w_field_slicer_box.children) == 0
 
 
+def test_fields_slicer_builds_on_demand_beyond_the_capped_tab(fw):
+    # max_slicers=1 leaves every categorical column but the first without a pre-built
+    # widget in the Slicers tab; dragging one of the rest into the Fields tab's Slicers
+    # zone must still produce a working quick filter, not the "no quick filter" message.
+    ex = explore(fw, max_rows=12, max_cols=5, max_slicers=1)
+    assert "country" not in ex.w_slicers
+    ex.w_fields.slicers = ["country"]
+    assert "country" in ex.w_slicers
+    kind, w = ex.w_slicers["country"]
+    assert kind == "in"
+    box = ex.w_field_slicer_box.children[0]
+    assert w in box.children  # the real widget was mounted, not a "no quick filter" message
+    some_country = w.options[0][1]
+    w.value = (some_country,)
+    assert len(ex.view.data) == (fw["country"] == some_country).sum()
+    assert "country" in ex.view.slices[0]
+
+
+def test_fields_slicer_numeric_builds_on_demand_beyond_the_hardcoded_cap():
+    # the Slicers tab pre-builds only the first 4 numeric columns regardless of
+    # max_slicers; a 5th must still build on demand when dragged into the Fields tab.
+    import numpy as np
+    import pandas as pd
+
+    rng = np.random.default_rng(0)
+    df = pd.DataFrame({f"n{i}": rng.normal(size=300) for i in range(6)})
+    ex = explore(df, max_rows=8, max_cols=4)
+    assert "n5" not in ex.w_slicers
+    ex.w_fields.slicers = ["n5"]
+    kind, w = ex.w_slicers["n5"]
+    assert kind == "range"
+    w.index = (0, len(w.options) // 2)
+    assert len(ex.view.data) < len(df)
+    ex.close()
+
+
 def test_best_fit_resyncs_fields_pane(ex, fw):
     ex.w_fields.rows = ["country"]
     ex.w_best.click()

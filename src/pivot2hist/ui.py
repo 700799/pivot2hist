@@ -105,6 +105,7 @@ class Explorer:
         numeric = [c.name for c in prof if c.kind == NUMERIC]
         labels = [c.name for c in prof if c.kind in (CATEGORICAL, BOOLEAN)]
         st = {"description_width": "80px"}
+        self._widget_style = st
 
         # -- top bar
         self.w_mode = W.ToggleButtons(options=[("Pivot", PIVOT), ("Histogram", HIST), ("Chains", CHAINS)], value=self.mode,
@@ -144,36 +145,17 @@ class Explorer:
         self.w_logy = W.Checkbox(value=False, description="log y")
         hist_tab = W.VBox([W.HBox([self.w_on, self.w_by]), self.w_nbins, W.HBox([self.w_stacked, self.w_density, self.w_logy])])
 
-        # -- slicers tab
+        # -- slicers tab: a fixed, capped grid of quick filters (avoids clutter on wide
+        # tables). Any OTHER column still gets a widget the moment it's dragged into the
+        # Fields tab's Slicers zone - see _make_slicer_widget / _refresh_field_slicers.
         self.w_slicers: Dict[str, Any] = {}
         boxes: List[Any] = []
         ranked = sorted([c for c in prof if c.kind in (CATEGORICAL, BOOLEAN)], key=lambda c: (c.position,))
-        for cp in ranked[: self._max_slicers]:
-            vc = self._source[cp.name].value_counts(dropna=False).head(30)
-            opts = [(f"{'(null)' if (isinstance(k, float) and np.isnan(k)) else k} ({n:,})", None if (isinstance(k, float) and np.isnan(k)) else k) for k, n in vc.items()]
-            w = W.SelectMultiple(options=opts, rows=min(6, len(opts)), description=cp.name[:12], style=st, layout=W.Layout(width="260px"))
-            self.w_slicers[cp.name] = ("in", w)
-            boxes.append(w)
-        for cp in [c for c in prof if c.kind == NUMERIC][:4]:
-            col = pd.to_numeric(self._source[cp.name], errors="coerce").to_numpy(dtype=float)
-            col = col[np.isfinite(col)]
-            if col.size == 0:
-                continue
-            qs = np.unique(np.percentile(col, np.linspace(0, 100, _NUM_STEPS + 1)))
-            if qs.size < 2:
-                continue
-            opts = [(human(q), float(q)) for q in qs]
-            w = W.SelectionRangeSlider(options=opts, index=(0, len(opts) - 1), description=cp.name[:12], style=st, layout=W.Layout(width="360px"), continuous_update=False)
-            self.w_slicers[cp.name] = ("range", w)
-            boxes.append(w)
-        for cp in [c for c in prof if c.kind == DATETIME][:2]:
-            days = self._source[cp.name].dropna().dt.floor("D").drop_duplicates().sort_values()
-            if len(days) < 2:
-                continue
-            opts = [(d.strftime("%Y-%m-%d"), d) for d in days]
-            w = W.SelectionRangeSlider(options=opts, index=(0, len(opts) - 1), description=cp.name[:12], style=st, layout=W.Layout(width="360px"), continuous_update=False)
-            self.w_slicers[cp.name] = ("days", w)
-            boxes.append(w)
+        capped = ranked[: self._max_slicers] + [c for c in prof if c.kind == NUMERIC][:4] + [c for c in prof if c.kind == DATETIME][:2]
+        for cp in capped:
+            entry = self._make_slicer_widget(cp.name)
+            if entry is not None:
+                boxes.append(entry[1])
         self.w_query = W.Text(placeholder="pandas query, e.g. bytes > 1000 and action == 'deny'  (Enter applies)", description="Query",
                               style=st, layout=W.Layout(width="520px"), continuous_update=False)
         self.w_top_col = W.Dropdown(options=[("(no top-N)", None)] + [(c, c) for c in labels], value=None, description="Top-N of", style=st)
@@ -285,8 +267,8 @@ class Explorer:
         for w in (self.w_stacked, self.w_density, self.w_logy, self.w_theme, self.w_heat, self.w_totals, self.w_bars,
                   self.w_compact, self.w_subtotals, self.w_outline, self.w_width, self.w_height):
             w.observe(self._on_style, names="value")
-        for _, (kind, w) in self.w_slicers.items():
-            w.observe(self._on_slicers, names="value" if kind != "range" and kind != "days" else "index")
+        # slicer widgets wire themselves up in _make_slicer_widget, whether built here
+        # (the capped Slicers tab) or on demand later (a field dropped into Fields tab)
         self.w_query.observe(self._on_query, names="value")  # continuous_update=False: fires on Enter/blur
         self.w_top_col.observe(self._on_slicers, names="value")
         self.w_top_n.observe(self._on_slicers, names="value")
@@ -617,14 +599,59 @@ class Explorer:
                 self._syncing = False
         self._act(go)
 
+    def _make_slicer_widget(self, name: str) -> Optional[Tuple[str, Any]]:
+        """The (kind, widget) quick filter for ``name``, building and wiring it up the
+        first time it's needed. Backs both the capped Slicers tab grid and any field
+        dropped into the Fields tab's Slicers zone - see :meth:`_refresh_field_slicers`."""
+        entry = self.w_slicers.get(name)
+        if entry is not None:
+            return entry
+        if name not in self._profile:
+            return None
+        cp = self._profile[name]
+        st = self._widget_style
+        if cp.kind in (CATEGORICAL, BOOLEAN):
+            vc = self._source[name].value_counts(dropna=False).head(30)
+            opts = [(f"{'(null)' if (isinstance(k, float) and np.isnan(k)) else k} ({n:,})",
+                     None if (isinstance(k, float) and np.isnan(k)) else k) for k, n in vc.items()]
+            if not opts:
+                return None
+            w = W.SelectMultiple(options=opts, rows=min(6, len(opts)), description=name[:12], style=st, layout=W.Layout(width="260px"))
+            entry = ("in", w)
+        elif cp.kind == NUMERIC:
+            col = pd.to_numeric(self._source[name], errors="coerce").to_numpy(dtype=float)
+            col = col[np.isfinite(col)]
+            if col.size == 0:
+                return None
+            qs = np.unique(np.percentile(col, np.linspace(0, 100, _NUM_STEPS + 1)))
+            if qs.size < 2:
+                return None
+            opts = [(human(q), float(q)) for q in qs]
+            w = W.SelectionRangeSlider(options=opts, index=(0, len(opts) - 1), description=name[:12], style=st,
+                                        layout=W.Layout(width="360px"), continuous_update=False)
+            entry = ("range", w)
+        elif cp.kind == DATETIME:
+            days = self._source[name].dropna().dt.floor("D").drop_duplicates().sort_values()
+            if len(days) < 2:
+                return None
+            opts = [(d.strftime("%Y-%m-%d"), d) for d in days]
+            w = W.SelectionRangeSlider(options=opts, index=(0, len(opts) - 1), description=name[:12], style=st,
+                                        layout=W.Layout(width="360px"), continuous_update=False)
+            entry = ("days", w)
+        else:
+            return None  # id / constant: no sensible quick filter
+        entry[1].observe(self._on_slicers, names="value" if entry[0] == "in" else "index")
+        self.w_slicers[name] = entry
+        return entry
+
     def _refresh_field_slicers(self) -> None:
         rows = []
         for name in self.field_slicers:
-            entry = self.w_slicers.get(name)
+            entry = self._make_slicer_widget(name)
             if entry is not None:
                 rows.append(W.VBox([W.HTML(f"<b style='font-size:11px'>{_html.escape(name)}</b>"), entry[1]]))
             else:
-                rows.append(W.HTML(f"<span style='font-size:11px;color:#889'>{_html.escape(name)}: no quick filter built for this column — use the Slicers tab (query or top-N)</span>"))
+                rows.append(W.HTML(f"<span style='font-size:11px;color:#889'>{_html.escape(name)}: no quick filter for this kind of column — use the Slicers tab (query or top-N)</span>"))
         self.w_field_slicer_box.children = rows
 
     def _on_options(self, change: Any) -> None:
