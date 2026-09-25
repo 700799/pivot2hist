@@ -42,7 +42,7 @@ from ._view import HIST, PIVOT, Derived, Filter, View
 from ._compare import ADDITIVE, METRICS, METRIC_HELP, Comparison, Facets
 from ._explain import Explanation
 
-__version__ = "0.15.0"
+__version__ = "0.16.0"
 
 _PLANNED_KEYS = ("memory_budget_mb", "mode", "columns", "query", "table", "sample_rows", "page_rows")
 

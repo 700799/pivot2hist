@@ -1004,7 +1004,8 @@ class View:
             s += f" x {cols}"
         return s
 
-    def title(self) -> str:
+    def title(self, *, slices: bool = True) -> str:
+        """One line: mode, layout, row counts and (unless ``slices=False``) the active slices."""
         if self._paged is not None:
             total = len(self._paged)
             seen = self._cache.get("paged_rows")
@@ -1018,7 +1019,7 @@ class View:
             s = f"{self._mode} \u00b7 {self.describe()} \u00b7 {n:,} rows"
             if n != total:
                 s += f" of {total:,}"
-        if self._filters:
+        if self._filters and slices:
             s += " \u00b7 slices: " + " & ".join(f.label for f in self._filters)
         return s
 
@@ -1057,14 +1058,18 @@ class View:
     def display(self) -> Dict[str, Any]:
         return dict(self._display)
 
-    def html(self, title: bool = True) -> str:
-        """Rich HTML: a heatmap table for pivots, an SVG bar chart for histograms."""
+    def html(self, title: bool = True, *, removable_slices: bool = False) -> str:
+        """Rich HTML: a heatmap table for pivots, an SVG bar chart for histograms. With
+        ``title``, the active slices are drawn as chips under the title line
+        (``removable_slices`` adds a x to each, for the explorer, whose output pane turns a
+        click on a chip into :meth:`unslice`)."""
         with log.step("render", "svg" if self.is_hist else "html"):
-            return self._html(title)
+            return self._html(title, removable_slices=removable_slices)
 
-    def _html(self, title: bool = True) -> str:
+    def _html(self, title: bool = True, *, removable_slices: bool = False) -> str:
         d = self._display
-        t = self.title() if title else None
+        t = self.title(slices=False) if title else None
+        chips = self.slices if title else None
         if self.is_hist:
             table = self.bins()
             density = None
@@ -1077,13 +1082,14 @@ class View:
             return hist_svg(
                 table, title=t, width=int(d.get("width", 760)), height=int(d.get("height", 340)), density=density,
                 stacked=bool(d.get("stacked", False)), log_y=bool(d.get("log_y", False)), show_values=d.get("show_values"),
-                theme=str(d.get("theme", "light")),
+                theme=str(d.get("theme", "light")), chips=chips, removable_chips=removable_slices,
             )
         return pivot_html(
             self.pivot(), title=t, heat=str(d.get("heat", "table")), bars=bool(d.get("bars", False)),
             totals=bool(d.get("totals", False)), compact=bool(d.get("compact", False)), max_rows=d.get("max_rows"),
             subtotals=bool(d.get("subtotals", False)), outline=bool(d.get("outline", False)),
             agg=self._layout.agg if self._layout.values is not None else "count", theme=str(d.get("theme", "light")),
+            chips=chips, removable_chips=removable_slices,
         )
 
     def svg(self) -> str:

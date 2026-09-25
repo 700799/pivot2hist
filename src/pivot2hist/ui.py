@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import html as _html
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -83,6 +83,31 @@ class Explorer:
     def close(self) -> None:
         """Stop listening to the step log."""
         self._unlisten()
+
+    # ------------------------------------------------------------------ tabs
+
+    def tab_names(self) -> List[str]:
+        """Every tab, in display order (grouped: Explore, Analyze, Style & code, Session)."""
+        return list(self._tab_index)
+
+    def select_tab(self, name: str) -> None:
+        """Bring tab ``name`` (e.g. ``"Inspect"``) to the front, whichever group it is in."""
+        if name not in self._tab_index:
+            raise KeyError(f"no tab {name!r}; have {self.tab_names()}")
+        gi, i = self._tab_index[name]
+        self.tabs.selected_index = gi
+        self.tabs.children[gi].selected_index = i
+
+    def current_tab(self) -> str:
+        """The name of the tab in front."""
+        gi = self.tabs.selected_index or 0
+        inner = self.tabs.children[gi]
+        return inner.get_title(inner.selected_index or 0)
+
+    def tab_group(self, name: str) -> str:
+        """The group tab ``name`` lives in."""
+        gi, _ = self._tab_index[name]
+        return self.tabs.get_title(gi)
 
     def clone(self, view: Optional[View] = None) -> "Explorer":
         """A second, independent explorer over the same data, for a new notebook cell.
@@ -524,6 +549,9 @@ class Explorer:
 
     def _on_cell_click(self, change: Dict[str, Any]) -> None:
         c = change["new"] or {}
+        if c.get("slice"):
+            self.remove_slice(str(c["slice"]))
+            return
         row = tuple(str(x) for x in c.get("row") or ()) or None
         col = tuple(str(x) for x in c.get("col") or ()) or None
         if not self.view.layout.cols:
@@ -536,7 +564,7 @@ class Explorer:
                 self.w_cell_col.value = col
         finally:
             self._syncing = False
-        self.tabs.selected_index = self.INSPECT_TAB
+        self.select_tab("Inspect")
         self._explain_clicked()
 
     def _refresh_cell_pickers(self) -> None:
@@ -848,17 +876,28 @@ class Explorer:
         self.w_stats_btn = W.Button(description="Refresh stats", icon="clock-o")
         stats_tab = W.VBox([W.HTML("<i>The seven costliest kinds of step so far (wall time, CPU time, peak memory delta).</i>"), self.w_stats_btn, self.w_stats])
 
-        self.tabs = W.Tab(children=[layout_tab, hist_tab, slice_tab, reduce_tab, chains_tab, style_tab, self.w_code,
-                                    self.w_profile, self.w_data, stats_tab, fields_tab, timeline_tab, insights_tab, compare_tab,
-                                    inspect_tab])
-        for i, t in enumerate(["Layout", "Histogram", "Slicers", "Reduce & cluster", "Chains", "Style", "Code",
-                               "Profile", "Data", "Stats", "Fields", "Timeline", "Insights", "Compare", "Inspect"]):
-            self.tabs.set_title(i, t)
-        self.FIELDS_TAB = 10
-        self.TIMELINE_TAB = 11
-        self.INSIGHTS_TAB = 12
-        self.COMPARE_TAB = 13
-        self.INSPECT_TAB = 14
+        # -- tabs in four groups, the everyday loop (shape it, slice it, ask about it) up front
+        groups: List[Tuple[str, List[Tuple[str, Any]]]] = [
+            ("Explore", [("Fields", fields_tab), ("Layout", layout_tab), ("Slicers", slice_tab), ("Histogram", hist_tab)]),
+            ("Analyze", [("Inspect", inspect_tab), ("Compare", compare_tab), ("Insights", insights_tab),
+                         ("Reduce & cluster", reduce_tab), ("Chains", chains_tab)]),
+            ("Style & code", [("Style", style_tab), ("Code", self.w_code)]),
+            ("Session", [("Timeline", timeline_tab), ("Profile", self.w_profile), ("Data", self.w_data), ("Stats", stats_tab)]),
+        ]
+        self.tab_groups: Dict[str, Any] = {}
+        self._tab_index: Dict[str, Tuple[int, int]] = {}
+        outer: List[Any] = []
+        for gi, (gname, items) in enumerate(groups):
+            inner = W.Tab(children=[w for _, w in items])
+            for i, (name, _) in enumerate(items):
+                inner.set_title(i, name)
+                self._tab_index[name] = (gi, i)
+            self.tab_groups[gname] = inner
+            outer.append(inner)
+        self.tabs = W.Tab(children=outer)
+        for gi, (gname, _) in enumerate(groups):
+            self.tabs.set_title(gi, gname)
+        self.FIELDS_TAB, self.TIMELINE_TAB, self.INSIGHTS_TAB, self.COMPARE_TAB, self.INSPECT_TAB = "Fields", "Timeline", "Insights", "Compare", "Inspect"
         top = W.HBox([self.w_mode, self.w_best, self.w_suggest_btn, self.w_suggest, self.w_undo, self.w_reset])
         self.box = W.VBox([top, self.tabs, self.w_status, self.w_out, W.HTML("<b style='font-size:11px;color:#666'>log</b>"), self.w_log])
         self._refresh_data_tab()
@@ -993,20 +1032,70 @@ class Explorer:
                 self._root_cache[key] = View.fit(base.source, options=self.options, **self.spec)
         return self._root_cache[key]
 
+    @staticmethod
+    def _apply_entry(v: View, kind: str, payload: Any) -> View:
+        """One recipe slice entry applied to ``v`` (no refit)."""
+        if kind == "slice":
+            return v.slice(refit=False, **payload)
+        if kind == "query":
+            return v.slice(payload, refit=False)
+        if kind == "top":
+            return v.top(*payload)
+        if kind == "filter":
+            return v._clone(filters=v.filters + (payload,))
+        if kind == "cell":
+            return v._clone(filters=v.filters + tuple(payload[1]))
+        return v
+
+    def _recipe_labels(self) -> List[List[str]]:
+        """The slice labels (as in ``view.slices``) each recipe entry contributes."""
+        v = self._root()
+        out: List[List[str]] = []
+        for kind, payload in self.slices:
+            before = len(v.filters)
+            v = self._apply_entry(v, kind, payload)
+            out.append([f.label for f in v.filters[before:]])
+        return out
+
+    def remove_slice(self, label: str) -> None:
+        """Drop one active slice by its label (as shown on its chip / in ``view.slices``),
+        whatever put it there - a slicer widget (which is reset), the query box, top-N, a
+        drilled-in cell. The explorer's output pane calls this when a chip is clicked."""
+        def go() -> None:
+            hits = [i for i, labels in enumerate(self._recipe_labels()) if label in labels]
+            if not hits:
+                raise KeyError(f"no active slice {label!r}; have {self.view.slices}")
+            for i in sorted(hits, reverse=True):
+                kind, payload = self.slices.pop(i)
+                self._reset_slice_widget(kind, payload)
+
+        self._act(go)  # a bad label lands in the status line, like any other failed step
+
+    def _reset_slice_widget(self, kind: str, payload: Any) -> None:
+        self._syncing = True
+        try:
+            if kind == "slice":
+                for col in payload:
+                    entry = self.w_slicers.get(col)
+                    if entry is None:
+                        continue
+                    wkind, w = entry
+                    if wkind == "in":
+                        w.value = ()
+                    else:
+                        w.index = (0, len(w.options) - 1)
+            elif kind == "query":
+                self.w_query.value = ""
+            elif kind == "top":
+                self.w_top_col.value = None
+        finally:
+            self._syncing = False
+
     def build(self) -> View:
         """The :class:`View` described by the current recipe."""
         v = self._root()
         for kind, payload in self.slices:
-            if kind == "slice":
-                v = v.slice(refit=False, **payload)
-            elif kind == "query":
-                v = v.slice(payload, refit=False)
-            elif kind == "top":
-                v = v.top(*payload)
-            elif kind == "filter":
-                v = v._clone(filters=v.filters + (payload,))
-            elif kind == "cell":
-                v = v._clone(filters=v.filters + tuple(payload[1]))
+            v = self._apply_entry(v, kind, payload)
         if self.refit_sliced or (self.slices and v._layout_stale()):
             v = v.refit()
         if self.mode == CHAINS:
@@ -1089,9 +1178,10 @@ class Explorer:
     def _rebuild(self) -> None:
         with log.step("explorer", "rebuild") as st:
             self.view = self.build()
-            self.w_out.value = self.view.html(title=False)  # the status line already shows it
+            # the title (with the slices as chips, removable when the pane can report clicks) lives in the pane
+            self.w_out.value = self.view.html(title=True, removable_slices=hasattr(self.w_out, "clicked"))
             st.detail = f"rebuild -> {self.view.layout.describe()}"
-        self.w_status.value = f"<span style='color:#555;font-size:12px'>{_html.escape(self.view.title())}</span>"
+        self.w_status.value = f"<span style='color:#555;font-size:12px'>{_html.escape(self.view.title(slices=False))}</span>"
         self.w_code.value = "<pre style='font-size:12px'>" + _html.escape(self.code()) + "</pre>"
         self._sync_widgets()
         self._refresh_stats()
@@ -1324,7 +1414,7 @@ class Explorer:
         self._act(go)
 
     def _slices_from_widgets(self) -> List[Tuple[str, Any]]:
-        out: List[Tuple[str, Any]] = [s for s in self.slices if s[0] in ("query", "filter")]
+        out: List[Tuple[str, Any]] = [s for s in self.slices if s[0] in ("query", "filter", "cell")]
         for col, (kind, w) in self.w_slicers.items():
             if kind == "in":
                 if w.value:
@@ -1408,15 +1498,17 @@ class Explorer:
 
     # ------------------------------------------------------------------ static snapshot
 
-    def snapshot_html(self, *, active_tab: Optional[int] = None) -> str:
+    def snapshot_html(self, *, active_tab: Optional[Union[int, str]] = None) -> str:
         """A static HTML picture of the interface (for docs, screenshots, sharing).
 
         Widgets are drawn as plain form elements with their current values; the output,
-        status line and log are the real thing.
+        status line and log are the real thing. ``active_tab`` brings a tab to the front
+        first: a name (``"Inspect"``) or a group index.
         """
-        tab = self.tabs.selected_index if active_tab is None else active_tab
-        if tab is None:
-            tab = 0
+        if isinstance(active_tab, str):
+            self.select_tab(active_tab)
+        elif active_tab is not None:
+            self.tabs.selected_index = int(active_tab)
         theme = str(self.display.get("theme", "light"))
         c = self._CHROME_THEME.get(theme, self._CHROME_THEME["light"])
 
@@ -1429,6 +1521,7 @@ class Explorer:
                 inner = "".join(render(x) for x in w.children)
                 return f"<div style='display:flex;flex-direction:{direction};flex-wrap:wrap;gap:6px;align-items:flex-start;margin:2px 0'>{inner}</div>"
             if name == "Tab":
+                tab = w.selected_index or 0
                 heads = "".join(
                     f"<span style='padding:5px 12px;border:1px solid {c['border']};border-bottom:{'none' if i == tab else '1px solid ' + c['border']};"
                     f"border-radius:8px 8px 0 0;background:{c['panel'] if i == tab else c['bg']};color:{c['text']};"

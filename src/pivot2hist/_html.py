@@ -12,7 +12,7 @@ from __future__ import annotations
 import html
 import json
 import math
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -208,6 +208,8 @@ def pivot_html(
     cell_format: Optional[Callable[[Any], str]] = None,
     tooltips: Optional[np.ndarray] = None,
     note: Optional[str] = None,
+    chips: Optional[Sequence[str]] = None,
+    removable_chips: bool = False,
 ) -> str:
     """Pivot table as an HTML heatmap. Cells carry the exact value as a tooltip.
 
@@ -229,13 +231,15 @@ def pivot_html(
     when given (so several tables can share one scale) or to their own peak. ``cell_format``
     replaces the number formatting of the visible text; ``tooltips`` (an object array of
     strings, same shape) replaces the per-cell hover text; ``note`` is a small footnote
-    under the table.
+    under the table; ``chips`` are the active slices, drawn under the title (see
+    :func:`slice_chips`).
     """
     p = _pal(theme)
+    wrap_kw: Dict[str, Any] = dict(theme=theme, chips=chips, removable_chips=removable_chips)
     if table.empty:
-        return _wrap(title, f"<div style='color:{p['empty_text']};padding:8px'>(empty)</div>", theme=theme)
+        return _wrap(title, f"<div style='color:{p['empty_text']};padding:8px'>(empty)</div>", **wrap_kw)
     if outline and table.index.nlevels > 1 and heat_values is None:
-        return _wrap(title, _outline_html(table, heat=heat, compact=compact, agg=agg, totals=totals, theme=theme), theme=theme)
+        return _wrap(title, _outline_html(table, heat=heat, compact=compact, agg=agg, totals=totals, theme=theme), **wrap_kw)
     t = table
     if max_rows is not None and len(t) > max_rows:
         t = t.head(max_rows)
@@ -363,7 +367,7 @@ def pivot_html(
         out.append(f"<div style='color:{p['empty_text']};font-size:11px;padding:4px 2px'>... {len(table) - len(t):,} more rows</div>")
     if note:
         out.append(f"<div style='{FONT};color:{p['empty_text']};font-size:11px;padding:4px 2px'>{_esc(note)}</div>")
-    return _wrap(title, "".join(out), theme=theme)
+    return _wrap(title, "".join(out), **wrap_kw)
 
 
 def _outline_html(table: pd.DataFrame, *, heat: str, compact: bool, agg: str, totals: bool, theme: str = "light", label_w: int = 190, col_w: int = 96) -> str:
@@ -444,9 +448,30 @@ def _outline_html(table: pd.DataFrame, *, heat: str, compact: bool, agg: str, to
     )
 
 
-def _wrap(title: Optional[str], body: str, *, theme: str = "light") -> str:
+def slice_chips(chips: Sequence[str], *, theme: str = "light", removable: bool = False) -> str:
+    """The active slices as small chips, each carrying its label in ``data-p2h-slice``
+    (the explorer's output pane turns a click on one into ``unslice``)."""
+    if not chips:
+        return ""
+    p = _pal(theme)
+    style = (f"display:inline-block;padding:1px 8px;margin:0 4px 2px 0;border-radius:10px;background:{p['sub_bg']};"
+             f"color:{p['sub_text']};border:1px solid {p['sub_border']};font-size:11px;white-space:nowrap")
+    if removable:
+        style += ";cursor:pointer"
+    x = f" <span style='color:{p['head_muted']};font-weight:600'>×</span>" if removable else ""
+    items = "".join(
+        f"<span class='p2h-slice' data-p2h-slice='{_esc(c)}' title='{_esc('slice: ' + c + (' - click to remove' if removable else ''))}' "
+        f"style='{style}'>{_esc(c)}{x}</span>"
+        for c in chips
+    )
+    return f"<div style='{FONT};margin:0 0 6px 0'><span style='font-size:11px;color:{p['head_muted']};margin-right:4px'>slices</span>{items}</div>"
+
+
+def _wrap(title: Optional[str], body: str, *, theme: str = "light", chips: Optional[Sequence[str]] = None,
+          removable_chips: bool = False) -> str:
     p = _pal(theme)
     head = f"<div style='{FONT};font-size:12px;color:{p['head_muted']};margin:0 0 6px 0'>{_esc(title)}</div>" if title else ""
+    head += slice_chips(chips or (), theme=theme, removable=removable_chips)
     outer = ""
     if p["page_bg"]:
         outer = f";background:{p['page_bg']};padding:{('10px' if p['panel_pad'] != '0' else '0')};border-radius:{p['panel_radius']}"
@@ -485,6 +510,8 @@ def hist_svg(
     show_values: Optional[bool] = None,
     theme: str = "light",
     vmax: Optional[float] = None,
+    chips: Optional[Sequence[str]] = None,
+    removable_chips: bool = False,
 ) -> str:
     """Histogram / bar chart as inline SVG.
 
@@ -493,11 +520,12 @@ def hist_svg(
     carries a tooltip. ``density`` is an optional ``(x, y)`` curve drawn over a numeric
     axis, e.g. from :func:`pivot2hist.bin_edges`'s sibling :func:`kde`. ``theme`` is
     ``"light"`` (default) or ``"graphite"`` (dark). ``vmax`` fixes the top of the y axis
-    (default: the tallest bar), so several charts can share one scale.
+    (default: the tallest bar), so several charts can share one scale. ``chips`` are the
+    active slices, drawn above the chart (see :func:`slice_chips`).
     """
     p = _pal(theme)
     if table.empty:
-        return _wrap(title, f"<div style='color:{p['empty_text']};padding:8px'>(empty)</div>", theme=theme)
+        return _wrap(title, f"<div style='color:{p['empty_text']};padding:8px'>(empty)</div>", theme=theme, chips=chips, removable_chips=removable_chips)
     values = np.where(np.isfinite(table.to_numpy(dtype=float)), table.to_numpy(dtype=float), 0.0)
     n_bins, n_series = values.shape
     series = [" / ".join(l) for l in _labels(table.columns)]
@@ -625,7 +653,7 @@ def hist_svg(
             if x > width - 60:
                 break
     out.append("</svg>")
-    return _wrap(None, "".join(out), theme=theme)
+    return _wrap(None, "".join(out), theme=theme, chips=chips, removable_chips=removable_chips)
 
 
-__all__ = ["pivot_html", "hist_svg", "grid_html", "heat_color", "PALETTE", "PALETTE_GRAPHITE", "PALETTES", "THEMES"]
+__all__ = ["pivot_html", "hist_svg", "grid_html", "slice_chips", "heat_color", "PALETTE", "PALETTE_GRAPHITE", "PALETTES", "THEMES"]

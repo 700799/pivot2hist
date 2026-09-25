@@ -725,18 +725,29 @@ p2h.explore(df)                                  # or v.explore(); files/DuckDB 
 
 An ipywidgets + anywidget app: Pivot / Histogram / Chains toggle, **Best fit**,
 **Suggest** (ranked alternatives with their score in a dropdown), Undo/Reset, and tabs
-for **Fields** (see below), Layout (rows, columns, values, agg, layers, box, bin rule,
-scale, order), Histogram (on, by, bins, stacked, density, log y), Slicers (multi-selects
-for labels, percentile range sliders for numbers, date ranges, a query box, top-N),
-Reduce & cluster (sample, cluster k / method / on / collapse, co-cluster, coarser /
-finer), Chains (state, entity, time, probabilities, plus the most frequent 3-step
-chains), Style (theme, heat incl. `surprise`, totals, subtotals, outline, bars, compact),
-Code (the Python reproducing the current view), Profile, Data (the survey and plan),
-Stats (the seven costliest steps), **Timeline** (checkpoints, see below), **Insights**
-(the local summary, see above), **Compare** (A vs B on one layout, small multiples,
-pin-a-baseline — see *Comparing*) and **Inspect** (click any cell: what's in it, why,
-and drill in — see *Interrogate a cell*). A scrolling log of major steps sits under the
-output. `explorer.snapshot_html()` renders a static
+in four groups, the everyday loop up front:
+
+- **Explore** — **Fields** (see below), Layout (rows, columns, values, agg, layers,
+  box, bin rule, scale, order), Slicers (multi-selects for labels, percentile range
+  sliders for numbers, date ranges, a query box, top-N), Histogram (on, by, bins,
+  stacked, density, log y);
+- **Analyze** — **Inspect** (click any cell: what's in it, why, and drill in — see
+  *Interrogate a cell*), **Compare** (A vs B on one layout, small multiples,
+  pin-a-baseline — see *Comparing*), **Insights** (the local summary, see above),
+  Reduce & cluster (sample, cluster k / method / on / collapse, co-cluster, coarser /
+  finer), Chains (state, entity, time, probabilities, plus the most frequent 3-step
+  chains);
+- **Style & code** — Style (theme, heat incl. `surprise`, totals, subtotals, outline,
+  bars, compact), Code (the Python reproducing the current view);
+- **Session** — **Timeline** (checkpoints, see below), Profile, Data (the survey and
+  plan), Stats (the seven costliest steps).
+
+`explorer.select_tab("Inspect")` / `explorer.current_tab()` address tabs by name. The
+active slices sit under the output's title as **chips** — one per slice, whatever put it
+there (a slicer widget, the query box, top-N, a drilled-in cell) — and clicking a chip's
+× removes just that slice and resets its widget (`explorer.remove_slice(label)` from
+code). The same chips appear under any `View`'s rendering in a plain notebook, just not
+clickable there. A scrolling log of major steps sits under the output. `explorer.snapshot_html()` renders a static
 picture of the interface for docs or sharing.
 
 **Fields tab**: every column as a draggable chip — kind, semantic type, non-null count

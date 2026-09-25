@@ -13,7 +13,7 @@ def ex(fw):
 
 def test_explorer_builds_and_renders(ex):
     assert isinstance(ex, Explorer)
-    assert "<table" in ex.w_out.value and "pivot" in ex.w_status.value
+    assert "<table" in ex.w_out.value and "pivot" in ex.w_status.value and "pivot" in ex.w_out.value
     assert "p2h.fit(df" in ex.code()
     assert ex._repr_mimebundle_() is not None
 
@@ -102,9 +102,12 @@ def test_explorer_log_stats_data_and_snapshot(ex):
     assert "<table" in ex.w_stats.value
     assert "in memory" in ex.w_data.value or "frame" in ex.w_data.value
     html = ex.snapshot_html()
-    assert "<select" in html and "Reduce" in html and "<table" in html
-    ex.tabs.selected_index = 4
+    assert "Explore" in html and "Fields" in html and "<table" in html
+    html = ex.snapshot_html(active_tab="Reduce & cluster")
+    assert "<select" in html and "Reduce" in html and ex.current_tab() == "Reduce & cluster"
+    ex.select_tab("Chains")
     assert "Markov" in ex.snapshot_html()
+    assert "Timeline" in ex.snapshot_html(active_tab="Timeline") and ex.current_tab() == "Timeline"
     ex.close()
 
 
@@ -140,7 +143,7 @@ def test_explorer_on_paged_source(tmp_path):
 
 
 def test_fields_tab_present_and_synced_with_layout(ex, fw):
-    assert ex.tabs.get_title(ex.FIELDS_TAB) == "Fields"
+    assert ex.FIELDS_TAB in ex.tab_names() and ex.tab_group("Fields") == "Explore"
     assert list(ex.w_fields.rows) == [d.column for d in ex.view.layout.rows if d.column in ex.w_rows.options]
     assert list(ex.w_fields.cols) == [d.column for d in ex.view.layout.cols if d.column in ex.w_cols.options]
 
@@ -376,7 +379,7 @@ def test_checkpoint_playback_widget_linked(ex):
 
 
 def test_insights_tab_present(ex):
-    assert ex.tabs.get_title(ex.INSIGHTS_TAB) == "Insights"
+    assert "Insights" in ex.tab_names() and ex.tab_group("Insights") == "Analyze"
 
 
 def test_calculate_populates_insights_tab(ex):
@@ -417,7 +420,7 @@ def test_insights_reflects_current_slice_in_explorer(ex, fw):
 
 
 def test_compare_tab_present_and_idle(ex):
-    assert ex.tabs.get_title(ex.COMPARE_TAB) == "Compare"
+    assert "Compare" in ex.tab_names() and ex.tab_group("Compare") == "Analyze"
     assert ex.comparison is None and "pick a column" in ex.w_cmp_out.value
 
 
@@ -488,7 +491,7 @@ def test_compare_metric_falls_back_for_non_additive_measures(ex):
 
 
 def test_inspect_tab_present_and_pickers_follow_the_table(ex):
-    assert ex.tabs.get_title(ex.INSPECT_TAB) == "Inspect" and "click a cell" in ex.w_cell_out.value
+    assert "Inspect" in ex.tab_names() and "click a cell" in ex.w_cell_out.value
     rows = [v for _, v in ex.w_cell_row.options if v is not None]
     cols = [v for _, v in ex.w_cell_col.options if v is not None]
     assert rows == [(str(x),) for x in ex.view.pivot().index] and cols == [(str(x),) for x in ex.view.pivot().columns]
@@ -524,7 +527,7 @@ def test_inspect_click_path_and_drill_in(ex):
     if not hasattr(ex.w_out, "clicked"):
         pytest.skip("anywidget not installed")
     ex.w_out.clicked = {"row": ["445"], "col": ["5"], "n": 1}
-    assert ex.cell["cell"] == {"dst_port": "445", "severity": "5"} and ex.tabs.selected_index == ex.INSPECT_TAB
+    assert ex.cell["cell"] == {"dst_port": "445", "severity": "5"} and ex.current_tab() == "Inspect"
     assert ex.w_cell_row.value == ("445",) and ex.w_cell_col.value == ("5",)
     before, n_before = ex.view.layout.describe(), len(ex.view.data)
     ex.w_cell_drill.click()
@@ -538,3 +541,63 @@ def test_inspect_click_path_and_drill_in(ex):
     ex.w_out.clicked = {"row": list(lab), "col": ["count"], "n": 2}
     assert ex.cell["cell"] == {"dst_port": lab[0]} and ex.cell["mode"] == "hist"
     ex.w_mode.value = "pivot"
+
+
+# --------------------------------------------------------------------------- tab groups & slice chips
+
+
+def test_tabs_are_grouped_and_selectable(ex):
+    assert [ex.tabs.get_title(i) for i in range(len(ex.tabs.children))] == ["Explore", "Analyze", "Style & code", "Session"]
+    names = ex.tab_names()
+    assert names[:4] == ["Fields", "Layout", "Slicers", "Histogram"] and names[4:7] == ["Inspect", "Compare", "Insights"]
+    assert len(names) == 15 and len(set(names)) == 15
+    assert ex.current_tab() == "Fields"
+    ex.select_tab("Stats")
+    assert ex.current_tab() == "Stats" and ex.tabs.selected_index == 3 and ex.tab_group("Stats") == "Session"
+    with pytest.raises(KeyError):
+        ex.select_tab("nope")
+
+
+def test_slice_chips_render_in_notebook_html(fw):
+    v = p2h.fit(fw, max_rows=10, max_cols=4)
+    assert "data-p2h-slice" not in v.html()
+    s = v.slice(action="deny").slice("bytes > 100")
+    html = s.html()
+    assert html.count("data-p2h-slice") == 2 and "action=deny" in html and "bytes &gt; 100" in html
+    assert "×" not in html.split("<table")[0]  # not removable in a plain notebook
+    assert "×" in s.html(removable_slices=True).split("<table")[0]
+    assert "data-p2h-slice" not in s.html(title=False)
+    assert s.toggle().html().count("data-p2h-slice") == 2
+    assert "slices: action=deny" in s.title() and "slices:" not in s.title(slices=False)
+
+
+def test_slice_chips_remove_slices_and_reset_widgets(ex, fw):
+    ex.w_slicers["action"][1].value = ("deny",)
+    ex.w_query.value = "bytes > 100"
+    ex.w_top_col.value = "src_ip"
+    assert len(ex.view.slices) == 3 and ex.w_out.value.count("data-p2h-slice") == 3
+    ex.remove_slice("bytes > 100")
+    assert "bytes > 100" not in ex.view.slices and ex.w_query.value == ""
+    ex.remove_slice(next(s for s in ex.view.slices if "top" in s))
+    assert ex.w_top_col.value is None and len(ex.view.slices) == 1
+    if hasattr(ex.w_out, "clicked"):
+        ex.w_out.clicked = {"slice": ex.view.slices[0], "n": 1}
+    else:
+        ex.remove_slice(ex.view.slices[0])
+    assert ex.view.slices == [] and ex.w_slicers["action"][1].value == () and len(ex.view.data) == len(fw)
+    ex.w_undo.click()
+    assert ex.view.slices == ["action∈{deny}"]
+    ex.remove_slice("action∈{deny}")
+    ex.remove_slice("nope")
+    assert "no active slice" in ex.w_status.value  # reported in the status line, never raised into the widget layer
+
+
+def test_drilled_cell_survives_a_later_slicer_change(ex):
+    ex.w_cell_row.value = ("22",)
+    ex.w_cell_col.value = ("3",)
+    ex.w_cell_drill.click()
+    assert ex.view.slices[:2] == ["dst_port=22", "severity=3"]
+    ex.w_slicers["protocol"][1].value = ("TCP",)
+    assert ex.view.slices[:2] == ["dst_port=22", "severity=3"] and "protocol" in ex.view.slices[-1]
+    ex.remove_slice("dst_port=22")
+    assert "dst_port=22" not in ex.view.slices and "severity=3" not in ex.view.slices  # one drill = one entry

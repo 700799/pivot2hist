@@ -27,9 +27,15 @@ function render({ model, el }) {
   draw();
   model.on("change:value", draw);
   box.addEventListener("click", (ev) => {
+    const prev = model.get("clicked") || {};
+    const s = ev.target.closest("[data-p2h-slice]");
+    if (s) {
+      model.set("clicked", { slice: s.dataset.p2hSlice, n: (prev.n || 0) + 1 });
+      model.save_changes();
+      return;
+    }
     const t = ev.target.closest("[data-p2h-row]");
     if (!t) return;
-    const prev = model.get("clicked") || {};
     model.set("clicked", {
       row: JSON.parse(t.dataset.p2hRow),
       col: JSON.parse(t.dataset.p2hCol),
@@ -46,7 +52,8 @@ try:
 
     class ClickableHTML(anywidget.AnyWidget):  # type: ignore[misc]
         """Rendered HTML whose cells report clicks: observe ``clicked`` for
-        ``{"row": [labels...], "col": [labels...], "n": click count}``."""
+        ``{"row": [labels...], "col": [labels...], "n": click count}`` (a cell or a bar) or
+        ``{"slice": label, "n": ...}`` (a slice chip)."""
 
         _esm = _ESM
         value = T.Unicode("").tag(sync=True)
