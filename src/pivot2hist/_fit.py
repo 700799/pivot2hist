@@ -27,6 +27,7 @@ from . import _semantic as S
 from ._profile import BOOLEAN, CATEGORICAL, CONSTANT, DATETIME, ID, NUMERIC, ColumnProfile, Profile, profile
 
 AGGS = ("sum", "mean", "count", "min", "max", "median", "nunique", "std")
+OBJECTIVES = ("heuristic", "bic")
 COUNT = "count"
 
 
@@ -82,6 +83,21 @@ class FitOptions:
         in-memory frame, and registering one with DuckDB has its own cost (amortized
         across repeated queries on the same frame, but still paid on the first one).
         Needs the ``duckdb`` package.
+    objective:
+        ``"heuristic"`` (default) or ``"bic"``: how a candidate layout's row/column
+        association is rewarded; the weight is still :data:`DEFAULT_WEIGHTS`'s
+        ``"mutual_info"``, only what it multiplies changes. ``"heuristic"`` uses the raw
+        mutual information between the axes. ``"bic"`` instead treats the row x column
+        contingency table as a model-selection question - is the association strong
+        enough to be worth the table's own complexity? - via the classical BIC
+        comparison of the saturated table against independence, per observation:
+        ``2 * mutual_info - (n_rows - 1) * (n_cols - 1) * log(n) / n``. The first term is
+        the log-likelihood-ratio/G-test statistic (divided by ``n``); the second is the
+        extra free parameters a full table needs over "rows and columns are
+        independent", at the usual BIC cost of ``log(n)`` each, also normalized so it
+        stays on the same nats-per-row scale as everything else. Cell-occupancy entropy
+        and every other term (sparsity, aspect ratio, layers, priors ...) still apply
+        the same way either way; only the association term changes.
     """
 
     max_rows: int = 40
@@ -106,6 +122,7 @@ class FitOptions:
     id_ratio: float = 0.5
     seed: int = 0
     engine: str = "pandas"
+    objective: str = "heuristic"
 
     @property
     def target_aspect(self) -> float:
@@ -511,7 +528,7 @@ class _Evaluator:
         """Observed rows/cols, non-empty cells, cell entropy and the mass folded into (other)."""
         n = len(self.sample)
         if n == 0:
-            return Shape(0, 0, 0, 0.0, 0.0, 0.0)
+            return Shape(0, 0, 0, 0.0, 0.0, 0.0, 0)
         r_key, n_rows, h_r = self._axis(rows)
         if cols:
             c_key, n_cols, h_c = self._axis(cols)
@@ -525,7 +542,7 @@ class _Evaluator:
             counts = np.array([n_rows])
             counts = np.unique(r_key, return_counts=True)[1]
         other = sum(self.other_frac(d) for d in list(rows) + list(cols))
-        return Shape(n_rows, n_cols, int(counts.size), h_rc, mi, other)
+        return Shape(n_rows, n_cols, int(counts.size), h_rc, mi, other, n)
 
     def _axis(self, dims: Sequence[Dim]) -> Tuple[np.ndarray, int, float]:
         """(combined key, distinct count, entropy) for one axis, cached per dims tuple."""
@@ -562,6 +579,7 @@ class Shape:
     entropy: float  # of the row-count distribution over cells, in nats
     mutual_info: float  # between the row axis and the column axis, in nats
     other_frac: float  # summed over dims: share of rows folded into "(other)"
+    n: int = 0  # sample rows the shape was measured on
 
     @property
     def sparsity(self) -> float:
@@ -589,24 +607,40 @@ DEFAULT_WEIGHTS: Dict[str, float] = {
 }
 
 
+def _bic_association(shape: Shape) -> float:
+    """Per-observation BIC comparison of the saturated row x column table against
+    independence: the G-test statistic (``2 * mutual_info``) minus the table's extra
+    degrees of freedom over independence, at the usual ``log(n)`` cost each, both
+    normalized by ``n`` so the result stays on the same nats scale as raw mutual
+    information (see :data:`FitOptions.objective`)."""
+    n = max(shape.n, 2)
+    dof = max(0, shape.n_rows - 1) * max(0, shape.n_cols - 1)
+    return 2.0 * shape.mutual_info - dof * math.log(n) / n
+
+
 def score_layout(
     shape: Shape, rows: Sequence[Dim], cols: Sequence[Dim], options: FitOptions, *, time_series: bool = False
 ) -> float:
     """Higher is better.
 
     Information is the entropy of how rows spread over cells (many, evenly used cells)
-    plus the mutual information between the axes (tables that show structure); it is
-    traded off against sparsity, distance from the target aspect ratio, extra layers,
-    low-quality dimensions and mass hidden in "(other)" buckets. See
-    :data:`DEFAULT_WEIGHTS` for every term.
+    plus a reward for association between the axes (tables that show structure) - raw
+    mutual information by default, or a BIC-style model-selection score when
+    ``options.objective == "bic"`` (see :func:`_bic_association`); it is traded off
+    against sparsity, distance from the target aspect ratio, extra layers, low-quality
+    dimensions and mass hidden in "(other)" buckets. See :data:`DEFAULT_WEIGHTS` for
+    every term.
     """
+    if options.objective not in OBJECTIVES:
+        raise ValueError(f"unknown objective {options.objective!r}; use one of {OBJECTIVES}")
     if shape.n_rows < 1 or shape.n_cols < 1 or shape.cells < 2:
         return -math.inf
     if shape.n_rows > options.max_rows or shape.n_cols > options.max_cols:
         return -math.inf
     w = DEFAULT_WEIGHTS if not options.weights else {**DEFAULT_WEIGHTS, **options.weights}
     sparsity = shape.sparsity
-    score = w["entropy"] * shape.entropy + w["mutual_info"] * shape.mutual_info
+    association = _bic_association(shape) if options.objective == "bic" else shape.mutual_info
+    score = w["entropy"] * shape.entropy + w["mutual_info"] * association
     score -= max(0.0, sparsity - options.max_sparsity) * w["sparsity_excess"]
     score -= sparsity * w["sparsity"]
     ratio = shape.n_rows / shape.n_cols

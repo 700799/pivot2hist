@@ -31,7 +31,7 @@ from ._density import FAMILIES as DIST_FAMILIES
 from ._mixture import GMMFit, choose_gmm_k, fit_gmm, mixture_cutpoints
 from ._hmm import HMMFit, choose_hmm_states, decode_regimes, fit_hmm
 from ._deps import dependency_pairs, mutual_info_matrix
-from ._fit import AGGS, DEFAULT_WEIGHTS, Dim, DimSpec, FitOptions, Layout, build_table, fit_layout, suggest_layouts
+from ._fit import AGGS, DEFAULT_WEIGHTS, OBJECTIVES, Dim, DimSpec, FitOptions, Layout, build_table, fit_layout, suggest_layouts
 from ._io import load
 from ._log import log, stats, verbose
 from ._profile import ColumnProfile, Profile
@@ -40,7 +40,7 @@ from ._semantic import HIERARCHY, infer_semantic
 from ._survey import Machine, PagedSource, Plan, Survey, downcast, load_planned, survey
 from ._view import HIST, PIVOT, Derived, Filter, View
 
-__version__ = "0.8.0"
+__version__ = "0.9.0"
 
 _PLANNED_KEYS = ("memory_budget_mb", "mode", "columns", "query", "table", "sample_rows", "page_rows")
 
@@ -84,8 +84,11 @@ def fit(
 
     Fix any of ``rows``/``cols``/``values``/``agg`` and the rest is chosen for you.
     Keyword options (``max_rows``, ``max_cols``, ``layers``, ``aspect``, ``bins``,
-    ``scale``, ``engine`` ...) are :class:`FitOptions` fields - ``engine="duckdb"`` runs
-    the table build as SQL against DuckDB instead of pandas (needs the ``duckdb`` package).
+    ``scale``, ``engine``, ``objective`` ...) are :class:`FitOptions` fields -
+    ``engine="duckdb"`` runs the table build as SQL against DuckDB instead of pandas
+    (needs the ``duckdb`` package); ``objective="bic"`` scores candidate layouts by a
+    BIC model-selection comparison (is the row/column association worth the table's own
+    complexity?) instead of the default entropy + mutual-info heuristic.
 
     Files and DuckDB sources are surveyed first (rows, size on disk, estimated memory
     against the machine's RAM); too-big data is fitted on a sample and aggregated page by
@@ -274,5 +277,5 @@ __all__ = [
     "modes", "GMMFit", "fit_gmm", "choose_gmm_k", "mixture_cutpoints",
     "HMMFit", "fit_hmm", "choose_hmm_states", "decode_regimes",
     "mutual_info_matrix", "dependency_pairs",
-    "RULES", "AGGS", "PIVOT", "HIST", "sample", "agent", "__version__",
+    "RULES", "AGGS", "OBJECTIVES", "PIVOT", "HIST", "sample", "agent", "__version__",
 ]
