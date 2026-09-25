@@ -128,7 +128,7 @@ def test_mcp_tools_registered(mcp_server_module):
 
     tools = asyncio.run(mcp_server_module.server.list_tools())
     names = {t.name for t in tools}
-    assert names == {"describe", "pivot", "llm_context", "insights", "compare", "rows", "explain", "suggest", "slicers", "anomalies"}
+    assert names == {"describe", "pivot", "llm_context", "insights", "compare", "rows", "explain", "prompt", "suggest", "slicers", "anomalies"}
     for t in tools:
         assert t.description and len(t.description) > 10
 
@@ -345,3 +345,41 @@ def test_mcp_rows_and_explain_tools(mcp_server_module, tmp_path, fw):
     r = json.loads(b.content[0].text)
     assert e["cell"] == {"dst_port": "22", "action": "deny"} and e["observed"] > 0 and len(e["rows"]) == 1
     assert r["n_returned"] == 3 and r["n_total"] == (fw["dst_port"] == 22).sum()
+
+
+def test_agent_prompt(fw):
+    r = agent.prompt(fw, question="q?", rows=["dst_port"], cols=["action"], insights=False)
+    _assert_json_safe(r)
+    assert set(r) == {"prompt", "chars", "tokens_estimate", "question"} and r["question"] == "q?"
+    assert r["prompt"].startswith("# Data analysis request") and r["prompt"].rstrip().endswith("q?")
+    assert r["chars"] == len(r["prompt"]) and r["tokens_estimate"] == round(len(r["prompt"]) / 4)
+    full = agent.prompt(
+        fw, split={"column": "action", "eq": "deny"}, cell={"dst_port": "22", "action": "deny"},
+        rows=["dst_port"], cols=["action"], filters=[{"column": "protocol", "eq": "TCP"}], metric="delta",
+    )
+    assert "## Comparison" in full["prompt"] and "## Cell in focus" in full["prompt"] and "Sliced to: protocol=TCP" in full["prompt"]
+    assert "under metric 'delta'" in full["prompt"]
+    from pivot2hist import DEFAULT_QUESTION
+
+    assert full["question"] == DEFAULT_QUESTION
+
+
+def test_mcp_prompt_tool_and_mcp_prompt(mcp_server_module, tmp_path, fw):
+    import asyncio
+
+    path = tmp_path / "fw.csv"
+    fw.to_csv(path, index=False)
+    server = mcp_server_module.server
+
+    async def run():
+        tool = await server.call_tool("prompt", {"source": str(path), "question": "q?", "rows": ["dst_port"], "cols": ["action"]})
+        prompts = await server.list_prompts() if hasattr(server, "list_prompts") else []
+        got = await server.get_prompt("analyze", {"source": str(path), "question": "why?"}) if hasattr(server, "get_prompt") else None
+        return tool, prompts, got
+
+    tool, prompts, got = asyncio.run(run())
+    d = json.loads(tool.content[0].text)
+    assert d["prompt"].startswith("# Data analysis request") and d["question"] == "q?"
+    if hasattr(server, "prompt"):
+        assert "analyze" in {p.name for p in prompts}
+        assert got is not None and "Data analysis request" in str(got) and "why?" in str(got)

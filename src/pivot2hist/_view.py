@@ -1309,6 +1309,34 @@ class View:
 
         return _explain(self, args, labels, n_rows=n_rows, k=k)
 
+    # ------------------------------------------------------------------ export
+
+    def prompt(self, question: Optional[str] = None, **kw: Any) -> Any:
+        """Everything on screen as one self-contained prompt for any LLM - a
+        :class:`Prompt` (a ``str`` that previews as markdown, with ``.tokens`` and
+        ``.save(path)``)::
+
+            p = v.prompt("Which destination ports deserve a firewall rule, and why?")
+            print(p)                        # or just `p` in a notebook - paste it into any chat
+            p.save("prompt.md")
+
+        The prompt states that every fact was computed locally and that the model should
+        reason only from them, then gives (each switchable): the **dataset** (rows in view,
+        every column with kind, semantic type, cardinality, nulls, examples; ``profile=``),
+        the **current view** (its description, active slices and the table as markdown,
+        ``table=``, ``max_rows=``/``max_cols=``), **computed findings** (the most surprising
+        cells, ``anomalies=``/``n_anomalies=``; the ranked :meth:`insights`, ``insights=True``
+        or a report you already have, at ``sensitivity=``), a **comparison** (``compare=``:
+        a :class:`Comparison`, or a split such as ``{"action": "deny"}`` or a query string),
+        a **cell in focus** (``explain=``: an :class:`Explanation`, ``{column: label}``, or a
+        ``(row_label, col_label)`` tuple), and **your task** - ``question``, or a default
+        asking for what stands out, three next steps and data-quality flags. No model is
+        called here; this is the packaging.
+        """
+        from ._prompt import build_prompt
+
+        return build_prompt(self, question, **kw)
+
     def explore(self, **kw: Any) -> Any:
         """Open the interactive Jupyter explorer (needs ``ipywidgets``)."""
         from .ui import explore

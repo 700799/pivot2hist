@@ -37,6 +37,7 @@ v.compare(action="deny")           # deny vs the rest on one shared layout: dive
 v.facet("action")                  # small multiples: one panel per value, same layout, one colour scale
 v.rows("22", "deny")               # the raw rows behind a cell, by the labels the table shows
 v.explain("22", "deny")            # why that cell: vs independence, shares, rank, and what sets its rows apart
+v.prompt("What's unusual here?")   # everything on screen as one paste-anywhere LLM prompt (no model is called)
 p2h.agent.pivot("firewall.csv", rows=["src_ip"], filters=[{"column": "action", "eq": "deny"}])  # plain JSON, for LLM agents
 ```
 
@@ -737,8 +738,9 @@ in four groups, the everyday loop up front:
   Reduce & cluster (sample, cluster k / method / on / collapse, co-cluster, coarser /
   finer), Chains (state, entity, time, probabilities, plus the most frequent 3-step
   chains);
-- **Style & code** — Style (theme, heat incl. `surprise`, totals, subtotals, outline,
-  bars, compact), Code (the Python reproducing the current view);
+- **Output** — Style (theme, heat incl. `surprise`, totals, subtotals, outline, bars,
+  compact), Code (the Python reproducing the current view), **Export** (everything on
+  screen as one LLM prompt: build, copy, download — see *Export to an LLM prompt*);
 - **Session** — **Timeline** (checkpoints, see below), Profile, Data (the survey and
   plan), Stats (the seven costliest steps).
 
@@ -807,6 +809,50 @@ the default and renders byte-identical to earlier releases.
 
 ![graphics: clustered heatmap, /24 roll-up, hour-of-day x weekday, natural-break stacked histogram](docs/graphics.png)
 
+## Export to an LLM prompt
+
+Everything on screen, packaged as one self-contained prompt for whichever model or chat
+you use — pivot2hist itself never calls one:
+
+```python
+p = v.prompt("Which destination ports deserve a firewall rule, and why?")
+p                 # notebook: rendered as markdown;  print(p) for the raw text
+p.tokens          # a rough size estimate (chars ÷ 4);  p.save("prompt.md")
+```
+
+What goes in, each switchable: a header saying every fact below was computed locally
+and that the model should reason only from them; the **dataset** (rows in view, every
+column with kind, semantic type, cardinality, nulls and examples — `profile=`); the
+**current view** (its description, active slices, and the table as markdown, capped at
+`max_rows` × `max_cols` — `table=`); **computed findings** (the most surprising cells —
+`anomalies=`; with `insights=True` the ranked `insights()` at `sensitivity=`, or pass a
+report you already have); a **comparison** (`compare=` a `Comparison`, or a split such as
+`{"action": "deny"}` or a query string); a **cell in focus** (`explain=` an
+`Explanation`, `{"dst_port": "22", "action": "deny"}` or `("22", "deny")`); and **your
+task** — the question, or a default asking what stands out, three next steps and
+data-quality flags.
+
+```python
+v.prompt(insights=True, compare={"action": "deny"}, explain=("22", "deny"))   # the full packet
+v.compare(action="deny").prompt("What changed, and does it matter?")            # a comparison on its own
+p2h.prompt("events.parquet", "What's unusual?", rows=["dst_port"], cols=["action"])  # the plain function
+```
+
+Why a prompt rather than a screenshot or a summary you type yourself: the model gets the
+exact numbers you are looking at, in a form it reads well (markdown tables), and is told
+which facts it may rely on — so its answer can be checked against the table.
+
+**In the explorer**, the **Export** tab (Output group) does this with a checkbox per
+section, a question box and a table-rows slider: **Build prompt** fills a text area,
+**Copy prompt** puts it on the clipboard in one click (with `anywidget`; otherwise
+select and copy), **Download .md** saves it, and a character / token estimate keeps an
+eye on the size. It picks up the Compare tab's comparison, the Inspect tab's cell and
+the last **Calculate**'d insights automatically. `explorer.prompt()` does the same from
+code. For agents, `agent.prompt(source, question=, split=, vs=, metric=, cell=,
+insights=, ...)` and the MCP `prompt` tool return the text, and the MCP server also
+registers it as a first-class MCP *prompt* named `analyze` (`source`, `question`), so a
+client can offer "analyze this file" the way it offers its own slash-command prompts.
+
 ## For LLM agents
 
 `pivot2hist.agent` is a plain-JSON surface: every function takes and returns only
@@ -828,6 +874,7 @@ agent.anomalies("events.parquet", rows=["dst_port"], cols=["action"])
 agent.compare("events.parquet", split={"column": "action", "eq": "deny"})   # deny vs the rest: lift per cell, top movers
 agent.explain("events.parquet", cell={"dst_port": "22", "action": "deny"}, rows=["dst_port"], cols=["action"])  # why this cell
 agent.rows("events.parquet", cell={"dst_port": "22", "action": "deny"}, rows=["dst_port"], cols=["action"], n=20)
+agent.prompt("events.parquet", question="What's unusual?", split={"column": "action", "eq": "deny"})   # one prompt, as text
 ```
 
 Filter objects: `{"column": c, "eq"|"not_eq"|"in"|"range"|"gt"|"gte"|"lt"|"lte"|"regex"|"since"|"on": value}`
@@ -900,7 +947,10 @@ filters=, sensitivity=, max_findings=, memory_budget_mb=)`, `compare(source, spl
 metric=, n=, rows=, cols=, values=, agg=, filters=, ...)` (`split` and `vs` are filter
 objects naming the sides; `vs` omitted = the rest), `rows(source, cell=, n=, ...)` and
 `explain(source, cell=, n_rows=, k=, ...)` (`cell` is `{column: label}` in the labels
-`pivot` showed; same layout arguments as `pivot` so they line up), `suggest(source, n=, filters=)`,
+`pivot` showed; same layout arguments as `pivot` so they line up), `prompt(source,
+question=, table=, profile=, anomalies=, insights=, split=, vs=, metric=, cell=, ...)`
+(one self-contained analysis prompt as text; also an MCP prompt named `analyze`),
+`suggest(source, n=, filters=)`,
 `slicers(source, columns=, top=)`, `anomalies(source, n=, rows=, cols=, filters=)`.
 Works against both `mcp<2` (`FastMCP`) and `mcp>=2` (`MCPServer`) — whichever is
 installed.

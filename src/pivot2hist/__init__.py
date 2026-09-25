@@ -41,8 +41,9 @@ from ._survey import Machine, PagedSource, Plan, Survey, downcast, load_planned,
 from ._view import HIST, PIVOT, Derived, Filter, View
 from ._compare import ADDITIVE, METRICS, METRIC_HELP, Comparison, Facets
 from ._explain import Explanation
+from ._prompt import DEFAULT_QUESTION, Prompt
 
-__version__ = "0.16.0"
+__version__ = "0.17.0"
 
 _PLANNED_KEYS = ("memory_budget_mb", "mode", "columns", "query", "table", "sample_rows", "page_rows")
 
@@ -276,6 +277,30 @@ def facet(
     return v.facet(column, n, levels=levels)
 
 
+def prompt(
+    data: Any,
+    question: Optional[str] = None,
+    *,
+    rows: Optional[Sequence[DimSpec]] = None,
+    cols: Optional[Sequence[DimSpec]] = None,
+    values: Optional[str] = None,
+    agg: Optional[str] = None,
+    table_max_rows: int = 30,
+    table_max_cols: int = 12,
+    **opts: Any,
+) -> Prompt:
+    """``data`` auto-fitted (or laid out as given) and packaged as one self-contained LLM
+    prompt: the dataset's columns, the table, the surprising cells, optionally insights /
+    a comparison / an explained cell, and ``question``. Equivalent to
+    ``p2h.fit(data, ...).prompt(question, ...)``; keyword arguments that are fit options
+    go to the fit, the rest (``insights=``, ``compare=``, ``explain=``, ``anomalies=`` ...)
+    to :meth:`View.prompt`. See there for what each section holds.
+    """
+    prompt_kw = _split_fit_kwargs(opts)
+    v = fit(data, rows=rows, cols=cols, values=values, agg=agg, **opts)
+    return v.prompt(question, max_rows=table_max_rows, max_cols=table_max_cols, **prompt_kw)
+
+
 def explore(data: Any, **kw: Any) -> Any:
     """Interactive Jupyter explorer (needs ``ipywidgets``): menus to alter, slice, best-fit,
     reduce and cluster, with heatmap pivots and SVG histograms."""
@@ -376,7 +401,7 @@ def dependencies(data: Any, columns: Optional[Sequence[str]] = None, *, bins: in
 __all__ = [
     "fit", "pivot", "histogram", "profile", "load", "suggest", "explore", "cluster", "chains", "regimes", "dependencies",
     "llm_context", "insights", "compare", "facet", "Comparison", "Facets", "METRICS", "METRIC_HELP", "ADDITIVE",
-    "Explanation",
+    "Explanation", "prompt", "Prompt", "DEFAULT_QUESTION",
     "survey", "load_planned", "downcast", "stats", "verbose", "log", "distribution",
     "sequences", "transitions", "transition_matrix", "steady_state",
     "View", "Layout", "Dim", "FitOptions", "Filter", "Derived", "Profile", "ColumnProfile",

@@ -547,10 +547,10 @@ def test_inspect_click_path_and_drill_in(ex):
 
 
 def test_tabs_are_grouped_and_selectable(ex):
-    assert [ex.tabs.get_title(i) for i in range(len(ex.tabs.children))] == ["Explore", "Analyze", "Style & code", "Session"]
+    assert [ex.tabs.get_title(i) for i in range(len(ex.tabs.children))] == ["Explore", "Analyze", "Output", "Session"]
     names = ex.tab_names()
     assert names[:4] == ["Fields", "Layout", "Slicers", "Histogram"] and names[4:7] == ["Inspect", "Compare", "Insights"]
-    assert len(names) == 15 and len(set(names)) == 15
+    assert len(names) == 16 and len(set(names)) == 16
     assert ex.current_tab() == "Fields"
     ex.select_tab("Stats")
     assert ex.current_tab() == "Stats" and ex.tabs.selected_index == 3 and ex.tab_group("Stats") == "Session"
@@ -601,3 +601,54 @@ def test_drilled_cell_survives_a_later_slicer_change(ex):
     assert ex.view.slices[:2] == ["dst_port=22", "severity=3"] and "protocol" in ex.view.slices[-1]
     ex.remove_slice("dst_port=22")
     assert "dst_port=22" not in ex.view.slices and "severity=3" not in ex.view.slices  # one drill = one entry
+
+
+# --------------------------------------------------------------------------- export tab
+
+
+def test_export_tab_builds_copies_and_downloads(ex):
+    assert "Export" in ex.tab_names() and ex.tab_group("Export") == "Output"
+    assert ex.prompt_text is None and ex.w_prompt_out.value == ""
+    ex.w_prompt_build.click()
+    p = ex.prompt_text
+    assert p is not None and p.startswith("# Data analysis request") and ex.w_prompt_out.value == str(p)
+    sections = [line for line in str(p).splitlines() if line.startswith("## ")]
+    assert sections == ["## Dataset", "## Current view", "## Computed findings", "## Your task"]
+    assert "characters" in ex.w_prompt_meta.value and "tokens" in ex.w_prompt_meta.value
+    assert "download='pivot2hist-prompt.md'" in ex.w_prompt_download.value and "data:text/markdown" in ex.w_prompt_download.value
+    if hasattr(ex.w_prompt_copy, "text"):
+        assert ex.w_prompt_copy.text == str(p)
+    else:
+        assert ex.w_prompt_copy.disabled
+    ex.w_prompt_question.value = "Why is port 22 hot?"
+    ex.w_prompt_table.value = False
+    p2 = ex.prompt()
+    assert p2.rstrip().endswith("Why is port 22 hot?") and "## Current view" not in p2
+    p3 = ex.prompt("override", table=True)
+    assert p3.rstrip().endswith("override") and "## Current view" in p3 and ex.w_prompt_out.value == str(p3)
+
+
+def test_export_includes_comparison_cell_and_insights(ex):
+    ex.w_cmp_col.value = "action"
+    ex.w_cmp_val.value = "deny"
+    ex.w_cell_row.value = ("22",)
+    ex.w_cell_col.value = ("3",)
+    ex.w_cell_explain.click()
+    p = ex.prompt()
+    assert "## Comparison" in p and "## Cell in focus" in p and "dst_port=22" in p and "action=deny (" in p
+    ex.w_prompt_compare.value = False
+    ex.w_prompt_cell.value = False
+    p = ex.prompt()
+    assert "## Comparison" not in p and "## Cell in focus" not in p
+    ex.w_prompt_insights.value = True
+    ex.calculate(sensitivity=1.0)
+    assert "significance" in ex.prompt()  # the fresh report, not recomputed
+    ex.w_rows.value = ("country",)  # the view moved on: recomputed at the slider's sensitivity
+    assert "## Computed findings" in ex.prompt()
+
+
+def test_export_errors_land_in_the_tab(ex):
+    ex.w_prompt_cell.value = True
+    ex.cell = {"text": None}  # not an Explanation: the build fails, and says so in the tab
+    ex.w_prompt_build.click()
+    assert "color:#b00020" in ex.w_prompt_meta.value

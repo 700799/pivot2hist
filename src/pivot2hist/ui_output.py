@@ -47,8 +47,46 @@ function render({ model, el }) {
 export default { render };
 """
 
+_COPY_ESM = """
+function render({ model, el }) {
+  const b = document.createElement("button");
+  b.className = "jupyter-button widget-button";
+  b.style.cssText = "padding:4px 12px;border-radius:6px;cursor:pointer";
+  const label = () => { b.textContent = model.get("label"); };
+  label();
+  model.on("change:label", label);
+  b.addEventListener("click", async () => {
+    const text = model.get("text") || "";
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch (e) {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      ta.remove();
+    }
+    b.textContent = "Copied";
+    setTimeout(label, 1500);
+    model.set("copies", (model.get("copies") || 0) + 1);
+    model.save_changes();
+  });
+  el.appendChild(b);
+}
+export default { render };
+"""
+
 try:
     import anywidget
+
+    class CopyButton(anywidget.AnyWidget):  # type: ignore[misc]
+        """A button that copies its ``text`` to the clipboard; ``copies`` counts clicks."""
+
+        _esm = _COPY_ESM
+        text = T.Unicode("").tag(sync=True)
+        label = T.Unicode("Copy").tag(sync=True)
+        copies = T.Int(0).tag(sync=True)
 
     class ClickableHTML(anywidget.AnyWidget):  # type: ignore[misc]
         """Rendered HTML whose cells report clicks: observe ``clicked`` for
@@ -63,6 +101,7 @@ try:
 except ImportError:  # pragma: no cover - exercised only without anywidget
     HAS_ANYWIDGET = False
     ClickableHTML = None  # type: ignore[assignment,misc]
+    CopyButton = None  # type: ignore[assignment,misc]
 
 
 def make_output(*, prefer_anywidget: bool = True) -> Any:
@@ -72,4 +111,12 @@ def make_output(*, prefer_anywidget: bool = True) -> Any:
     return W.HTML()
 
 
-__all__ = ["ClickableHTML", "make_output", "HAS_ANYWIDGET"]
+def make_copy_button(label: str = "Copy", *, prefer_anywidget: bool = True) -> Any:
+    """A one-click copy-to-clipboard button when ``anywidget`` is installed; otherwise a
+    disabled placeholder that says to select the text and copy it."""
+    if prefer_anywidget and HAS_ANYWIDGET and CopyButton is not None:
+        return CopyButton(label=label)
+    return W.Button(description=label, disabled=True, tooltip="one-click copy needs anywidget; select the text and copy it")
+
+
+__all__ = ["ClickableHTML", "CopyButton", "make_output", "make_copy_button", "HAS_ANYWIDGET"]

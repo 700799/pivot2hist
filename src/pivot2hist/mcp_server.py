@@ -47,7 +47,9 @@ server = _Server(
         "returns the cells that moved most. When one cell of a table looks interesting, "
         "explain() says what's in it (vs what independence would predict, its shares, and "
         "what sets its rows apart) and rows() returns the raw rows behind it - name the "
-        "cell by the labels pivot() showed. Files are surveyed against available memory "
+        "cell by the labels pivot() showed. prompt() packages any of that as one "
+        "self-contained markdown prompt, for briefing another model or a sub-agent. Files "
+        "are surveyed against available memory "
         "and streamed page by page when too large to hold in memory, so any source can be "
         "passed directly by path."
     ),
@@ -255,6 +257,60 @@ def explain(
         source, cell=cell, n_rows=n_rows, k=k, rows=rows, cols=cols, values=values, agg=agg, filters=filters, mode=mode,
         on=on, by=by, bins=bins, max_rows=max_rows, max_cols=max_cols, memory_budget_mb=memory_budget_mb,
     )
+
+
+@server.tool()
+def prompt(
+    source: str,
+    question: Optional[str] = None,
+    table: bool = True,
+    profile: bool = True,
+    anomalies: bool = True,
+    insights: bool = False,
+    sensitivity: float = 0.5,
+    split: Optional[Dict[str, Any]] = None,
+    vs: Optional[Dict[str, Any]] = None,
+    metric: Optional[str] = None,
+    cell: Optional[Dict[str, Any]] = None,
+    rows: Optional[List[str]] = None,
+    cols: Optional[List[str]] = None,
+    values: Optional[str] = None,
+    agg: Optional[str] = None,
+    filters: Optional[List[Dict[str, Any]]] = None,
+    mode: str = "pivot",
+    on: Optional[str] = None,
+    by: Optional[str] = None,
+    bins: Optional[str] = None,
+    table_max_rows: int = 30,
+    table_max_cols: int = 12,
+    max_rows: int = 40,
+    max_cols: int = 12,
+    memory_budget_mb: Optional[float] = None,
+) -> Dict[str, Any]:
+    """One self-contained analysis prompt as markdown text, built from facts computed
+    locally: the dataset's columns, the pivot table with its filters, the most surprising
+    cells, optionally the ranked insights, a comparison (split/vs/metric as in compare())
+    and a cell in focus (cell as in explain()), then the question. Use it to brief another
+    model or a sub-agent, to hand a colleague a ready-made ask, or to save an analysis
+    packet - the model that receives it gets exact numbers and is told to reason only from
+    them. Returns the prompt, its size in characters and a rough token estimate."""
+    return _agent.prompt(
+        source, question=question, table=table, profile=profile, anomalies=anomalies, insights=insights,
+        sensitivity=sensitivity, split=split, vs=vs, metric=metric, cell=cell, table_max_rows=table_max_rows,
+        table_max_cols=table_max_cols, rows=rows, cols=cols, values=values, agg=agg, filters=filters, mode=mode,
+        on=on, by=by, bins=bins, max_rows=max_rows, max_cols=max_cols, memory_budget_mb=memory_budget_mb,
+    )
+
+
+if hasattr(server, "prompt"):  # MCP prompts are first-class in the protocol; register one where the SDK supports it
+
+    @server.prompt()
+    def analyze(source: str, question: str = "") -> str:
+        """A ready-to-use analysis prompt for a data file: its columns, an auto-fitted
+        pivot table, the most surprising cells, and your question (or a default asking
+        what stands out, what to look at next, and what looks like a data-quality issue).
+        Everything in it was computed locally from the data."""
+        return _agent.prompt(source, question=question or None)["prompt"]
 
 
 @server.tool()

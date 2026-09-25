@@ -733,6 +733,17 @@ class Comparison:
         kw.setdefault("indent", 2)
         return json.dumps(self.to_dict(), **kw)
 
+    def prompt(self, question: Optional[str] = None, **kw: Any) -> Any:
+        """This comparison as a self-contained LLM prompt (see :meth:`View.prompt`): the
+        dataset, the comparison (both sides, the metric table, the biggest movers) and
+        the question; the plain table and anomaly sections are off unless asked for."""
+        from ._prompt import build_prompt
+
+        base = self._base if self._split else self.a
+        kw.setdefault("table", False)
+        kw.setdefault("anomalies", False)
+        return build_prompt(base, question, compare=self, **kw)
+
     def llm_context(self, *, max_rows: int = 30, max_cols: int = 12, top: int = 5) -> Dict[str, Any]:
         """``{"description", "metadata", "table"}`` for a model: what was compared and
         how, the biggest movers in words, and the metric table as markdown."""

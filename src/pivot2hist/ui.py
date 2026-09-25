@@ -16,6 +16,7 @@ from __future__ import annotations
 import datetime as _dt
 import html as _html
 from typing import Any, Dict, List, Optional, Tuple, Union
+from urllib.parse import quote as _quote
 
 import numpy as np
 import pandas as pd
@@ -30,12 +31,13 @@ from ._chains import sequences as _sequences
 from ._cluster import COMETHODS, METHODS
 from ._compare import METRICS, METRIC_HELP, Comparison, Facets
 from ._explain import Explanation, cell_filters, parse_cell
+from ._prompt import DEFAULT_QUESTION, Prompt
 from ._fit import AGGS, COUNT, FitOptions, Layout
 from ._log import log
 from ._profile import BOOLEAN, CATEGORICAL, DATETIME, NUMERIC, Profile, profile
 from ._view import HIST, PIVOT, View
 from .ui_fields import _set_mark, make_field_list
-from .ui_output import make_output
+from .ui_output import make_copy_button, make_output
 
 CHAINS = "chains"
 
@@ -87,7 +89,7 @@ class Explorer:
     # ------------------------------------------------------------------ tabs
 
     def tab_names(self) -> List[str]:
-        """Every tab, in display order (grouped: Explore, Analyze, Style & code, Session)."""
+        """Every tab, in display order (grouped: Explore, Analyze, Output, Session)."""
         return list(self._tab_index)
 
     def select_tab(self, name: str) -> None:
@@ -330,6 +332,45 @@ class Explorer:
         self.w_insights.value = (
             banner + f"<div style='font-size:12px;margin-bottom:8px'>{_html.escape(report['summary'])}</div>" + findings_html
         )
+
+    # ------------------------------------------------------------------ export
+
+    def prompt(self, question: Optional[str] = None, **overrides: Any) -> Prompt:
+        """Build the LLM prompt from what is on screen - :meth:`View.prompt` on the current
+        view with the Export tab's toggles (the table, dataset columns, surprising cells,
+        the Insights report when computed for this view, the Compare tab's comparison, the
+        Inspect tab's cell; any of them overridable by keyword) - show it in the tab, wire
+        the Copy / Download buttons, and return it. ``question`` defaults to the tab's
+        question box, which defaults to a general "what stands out, what next" ask."""
+        use_insights: Any = False
+        if self.w_prompt_insights.value:
+            fresh = self._insights_report is not None and self._insights_view_id == id(self.view)
+            use_insights = self._insights_report if fresh else True
+        kw: Dict[str, Any] = dict(
+            table=self.w_prompt_table.value, profile=self.w_prompt_profile.value, anomalies=self.w_prompt_anomalies.value,
+            insights=use_insights, sensitivity=self.w_sensitivity.value, max_rows=int(self.w_prompt_rows.value),
+            compare=self.comparison if (self.w_prompt_compare.value and isinstance(self.comparison, Comparison)) else None,
+            explain=self.cell if (self.w_prompt_cell.value and self.cell is not None) else None,
+        )
+        kw.update(overrides)
+        q = question if question is not None else (self.w_prompt_question.value.strip() or None)
+        p = self.view.prompt(q, **kw)
+        self.prompt_text = p
+        self.w_prompt_out.value = str(p)
+        if hasattr(self.w_prompt_copy, "text"):
+            self.w_prompt_copy.text = str(p)
+        href = "data:text/markdown;charset=utf-8," + _quote(str(p))
+        self.w_prompt_download.value = (
+            f"<a download='pivot2hist-prompt.md' href='{href}' style='font-size:12px;margin-left:8px'>Download .md</a>"
+        )
+        self.w_prompt_meta.value = f"<span style='font-size:11px;color:#667'>{p.chars:,} characters ≈ {p.tokens:,} tokens</span>"
+        return p
+
+    def _build_prompt_clicked(self) -> None:
+        try:
+            self.prompt()
+        except Exception as e:  # noqa: BLE001 - surface any failure in the tab, not a traceback
+            self.w_prompt_meta.value = f"<span style='color:#b00020'>{_html.escape(type(e).__name__)}: {_html.escape(str(e))}</span>"
 
     # ------------------------------------------------------------------ compare
 
@@ -865,6 +906,38 @@ class Explorer:
             self.w_cell_out,
         ])
 
+        # -- export tab: everything on screen as one prompt for any LLM
+        self.w_prompt_question = W.Textarea(placeholder="your question (blank: " + DEFAULT_QUESTION[:60] + "...)",
+                                            description="Question", style=st, layout=W.Layout(width="760px", height="64px"))
+        self.w_prompt_table = W.Checkbox(value=True, description="the table (current view)")
+        self.w_prompt_profile = W.Checkbox(value=True, description="dataset columns")
+        self.w_prompt_anomalies = W.Checkbox(value=True, description="surprising cells")
+        self.w_prompt_insights = W.Checkbox(value=False, description="insights (last Calculate, else computed now)")
+        self.w_prompt_compare = W.Checkbox(value=True, description="the Compare tab's comparison, if any")
+        self.w_prompt_cell = W.Checkbox(value=True, description="the Inspect tab's cell, if any")
+        self.w_prompt_rows = W.IntSlider(value=30, min=5, max=100, step=5, description="Table rows", style=st)
+        self.w_prompt_build = W.Button(description="Build prompt", icon="file-text-o", button_style="primary")
+        self.w_prompt_copy = make_copy_button("Copy prompt")
+        self.w_prompt_download = W.HTML()
+        self.w_prompt_meta = W.HTML()
+        self.w_prompt_out = W.Textarea(placeholder="click Build prompt", layout=W.Layout(width="100%", height="320px"))
+        self.prompt_text: Optional[Prompt] = None
+        export_tab = W.VBox([
+            W.HTML(
+                "<i>Everything on screen as one self-contained prompt for any LLM: the dataset's columns, the "
+                "current table with its slices, the most surprising cells, optionally the Insights report, the "
+                "Compare tab's comparison and the Inspect tab's cell, then your question. The prompt tells the "
+                "model that every fact was computed locally and to reason only from them. Nothing here calls a "
+                "model - copy it into whichever chat or agent you use.</i>"
+            ),
+            self.w_prompt_question,
+            W.HBox([self.w_prompt_table, self.w_prompt_profile, self.w_prompt_anomalies]),
+            W.HBox([self.w_prompt_insights, self.w_prompt_compare, self.w_prompt_cell]),
+            W.HBox([self.w_prompt_rows, self.w_prompt_build, self.w_prompt_copy, self.w_prompt_download]),
+            self.w_prompt_meta,
+            self.w_prompt_out,
+        ])
+
         # -- code, profile, data, stats tabs; output; log panel
         self.w_code = W.HTML()
         self.w_out = make_output()
@@ -881,7 +954,7 @@ class Explorer:
             ("Explore", [("Fields", fields_tab), ("Layout", layout_tab), ("Slicers", slice_tab), ("Histogram", hist_tab)]),
             ("Analyze", [("Inspect", inspect_tab), ("Compare", compare_tab), ("Insights", insights_tab),
                          ("Reduce & cluster", reduce_tab), ("Chains", chains_tab)]),
-            ("Style & code", [("Style", style_tab), ("Code", self.w_code)]),
+            ("Output", [("Style", style_tab), ("Code", self.w_code), ("Export", export_tab)]),
             ("Session", [("Timeline", timeline_tab), ("Profile", self.w_profile), ("Data", self.w_data), ("Stats", stats_tab)]),
         ]
         self.tab_groups: Dict[str, Any] = {}
@@ -947,6 +1020,7 @@ class Explorer:
         self._refresh_compare()
         self.w_cell_explain.on_click(lambda _: self._explain_clicked())
         self.w_cell_drill.on_click(lambda _: self.drill_into())
+        self.w_prompt_build.on_click(lambda _: self._build_prompt_clicked())
         if hasattr(self.w_out, "clicked"):
             self.w_out.observe(self._on_cell_click, names="clicked")
         self._show_cell_hint()

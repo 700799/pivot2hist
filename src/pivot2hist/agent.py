@@ -504,6 +504,64 @@ def explain(
     return dict(v.explain(n_rows=n_rows, k=k, **cell))
 
 
+def prompt(
+    source: Source,
+    *,
+    question: Optional[str] = None,
+    table: bool = True,
+    profile: bool = True,
+    anomalies: bool = True,
+    insights: bool = False,
+    sensitivity: float = 0.5,
+    split: Optional[Filter] = None,
+    vs: Optional[Filter] = None,
+    metric: Optional[str] = None,
+    cell: Optional[Dict[str, Any]] = None,
+    table_max_rows: int = 30,
+    table_max_cols: int = 12,
+    rows: Optional[Sequence[str]] = None,
+    cols: Optional[Sequence[str]] = None,
+    values: Optional[str] = None,
+    agg: Optional[str] = None,
+    filters: Optional[Sequence[Filter]] = None,
+    mode: str = "pivot",
+    on: Optional[str] = None,
+    by: Optional[Union[str, Sequence[str]]] = None,
+    bins: Optional[Union[str, int]] = None,
+    max_rows: int = 40,
+    max_cols: int = 12,
+    memory_budget_mb: Optional[float] = None,
+    columns: Optional[Sequence[str]] = None,
+    **opts: Any,
+) -> Dict[str, Any]:
+    """One self-contained analysis prompt, as text, built from facts computed locally -
+    for handing to another model, a colleague's chat, or a file. It states that nothing
+    in it is invented and that the model should reason only from it, then gives the
+    dataset's columns (``profile``), the table with its filters (``table``), the most
+    surprising cells (``anomalies``), optionally the ranked insights (``insights``, at
+    ``sensitivity``), a comparison (``split``/``vs``/``metric`` as in :func:`compare`), a
+    cell in focus (``cell`` as in :func:`explain`), and ``question`` (default: what stands
+    out, three next steps, data-quality flags). Same layout arguments as :func:`pivot`.
+    Returns ``prompt`` (markdown), ``chars``, ``tokens_estimate`` and the ``question`` used.
+    """
+    from ._prompt import DEFAULT_QUESTION
+
+    v = _view_for(source, rows=rows, cols=cols, values=values, agg=agg, filters=filters, mode=mode, on=on, by=by, bins=bins,
+                  max_rows=max_rows, max_cols=max_cols, memory_budget_mb=memory_budget_mb, columns=columns, opts=opts)
+    comparison = None
+    if split is not None:
+        sa = _side_spec(split)
+        comparison = v.compare(sa) if vs is None else v.compare(sa, _side_spec(vs))
+        if metric is not None:
+            comparison = comparison.with_metric(metric)
+    p = v.prompt(
+        question, table=table, profile=profile, anomalies=anomalies, insights=bool(insights), sensitivity=sensitivity,
+        compare=comparison, explain=dict(cell) if cell else None, max_rows=table_max_rows, max_cols=table_max_cols,
+    )
+    return {"prompt": str(p), "chars": p.chars, "tokens_estimate": p.tokens,
+            "question": question.strip() if isinstance(question, str) and question.strip() else DEFAULT_QUESTION}
+
+
 def suggest(
     source: Source,
     n: int = 5,
@@ -595,4 +653,4 @@ def slicers(
     return {col: [{"value": val, "count": int(c)} for val, c in vals] for col, vals in raw.items()}
 
 
-__all__ = ["describe", "pivot", "llm_context", "insights", "compare", "rows", "explain", "suggest", "slicers", "anomalies", "FILTER_OPS"]
+__all__ = ["describe", "pivot", "llm_context", "insights", "compare", "rows", "explain", "prompt", "suggest", "slicers", "anomalies", "FILTER_OPS"]
