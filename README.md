@@ -8,7 +8,7 @@ generic, so it works on any tabular data.
 ```
 pip install pivot2hist                       # pandas + numpy only
 pip install "pivot2hist[jupyter]"            # + ipywidgets/anywidget for the interactive explorer
-pip install "pivot2hist[parquet,duckdb]"     # + pyarrow / duckdb sources (surveyed and paged)
+pip install "pivot2hist[parquet,duckdb]"     # + pyarrow / duckdb sources (surveyed, paged, engine="duckdb")
 pip install "pivot2hist[cluster]"            # + scikit-learn for real HDBSCAN
 pip install "pivot2hist[mcp]"                # + an MCP server for LLM agents
 ```
@@ -28,6 +28,8 @@ v.anomalies()                      # cells that break the row/column independenc
 p2h.explore(df)                    # Jupyter menus: drag fields, pick a theme, all of the above
 p2h.fit("huge.parquet")            # surveyed against your RAM; fitted on a sample, aggregated page by page
 p2h.chains(df, "event", by="user", time="timestamp")   # Markov transition matrix as a pivot
+p2h.regimes(df, "event", by="user", time="timestamp")  # HMM-decoded behavioural regimes, as a pivot
+p2h.dependencies(df)               # which columns move together, as a pivot (mutual information)
 p2h.verbose(); p2h.stats(7)        # scrolling step log; the seven costliest steps
 p2h.agent.pivot("firewall.csv", rows=["src_ip"], filters=[{"column": "action", "eq": "deny"}])  # plain JSON, for LLM agents
 ```
@@ -35,6 +37,97 @@ p2h.agent.pivot("firewall.csv", rows=["src_ip"], filters=[{"column": "action", "
 Shell: `pivot2hist firewall.csv --slice action=deny --hist --on bytes --by dst_port`,
 `pivot2hist --demo firewall`. MCP server for any MCP client (Claude Code, Claude Desktop,
 ...): `pivot2hist-mcp`.
+
+## How it works
+
+**Program flow** — every entry point (`fit`, `explore`, the agent API, the MCP server,
+the CLI) funnels through the same five steps; a `View` is immutable, so `.slice()`,
+`.suggest()`, `.cluster()` and friends each return a new one instead of mutating it:
+
+```
+  entry points
+  ------------
+  p2h.fit / histogram / chains / regimes / dependencies(df, ...)
+  p2h.explore(df)      -> Explorer (ipywidgets: drag fields, live re-fit)
+  p2h.agent.*          -> plain JSON, for LLM tool-calling
+  pivot2hist-mcp       -> MCP server, same operations over stdio
+  CLI: pivot2hist FILE [--hist] [--slice ...] [--chains ...]
+              |
+              v
+  +------------------------------------------------------------------+
+  | 1. LOAD / SURVEY        p2h.load()  or  p2h.survey() + plan      |
+  |    fits the memory budget?  --yes-->  load fully, or downcast    |
+  |    too big?                 --no -->  sample + page (see below)  |
+  +------------------------------------------------------------------+
+              |
+              v
+  +------------------------------------------------------------------+
+  | 2. PROFILE              p2h.profile(df)                          |
+  |    kind (numeric/categorical/datetime/boolean/id/constant)       |
+  |    + semantic type (ipv4, port, url, email, domain, path, ...)   |
+  +------------------------------------------------------------------+
+              |
+              v
+  +------------------------------------------------------------------+
+  | 3. FIT LAYOUT            fit_layout()            (_fit.py)       |
+  |    search rows x cols x layers x bins/top-N/time-freq            |
+  |    score = entropy + association   [ raw mutual_info,            |
+  |            - sparsity - aspect       or BIC: objective="bic" ]   |
+  |            - layers + quality - "(other)" + pivot-shape priors   |
+  +------------------------------------------------------------------+
+              |
+              v
+  +------------------------------------------------------------------+
+  | 4. VIEW      (source, Layout, filters, mode) - immutable, cached |
+  |                                                                  |
+  |    .pivot() / .bins()  -->  build_table()  -->  pandas groupby   |
+  |                                             or  engine="duckdb"  |
+  |    .toggle()    pivot <-> histogram, same underlying data        |
+  |    .slice(...)  stack a filter -> a new View                     |
+  |    .suggest()   re-run the search, ranked alternatives           |
+  |    .cluster() / .cocluster()   group rows / rows and columns     |
+  |    .style(...)  theme, heat, totals, subtotals, outline          |
+  +------------------------------------------------------------------+
+              |
+              v
+  +------------------------------------------------------------------+
+  | 5. RENDER                                                        |
+  |    str(v)               render_pivot() / render_hist()  (text)   |
+  |    v.html() / v.svg()   pivot_html() / hist_svg()  (HTML/SVG)    |
+  +------------------------------------------------------------------+
+```
+
+**Data flow** — how one column actually gets there, and where the analysis features
+(mixtures, regimes, dependencies, anomalies, distributions, clustering) branch off the
+same `View` rather than being a separate pipeline:
+
+```
+  DataFrame column
+        |
+        v
+  profile()        kind (numeric / categorical / datetime / boolean / id / constant)
+        |          + semantic type (ipv4 -> /24 -> /16, port -> class, url -> host ...)
+        v
+  plan_dim()        a Dim: binned (edges) | categorical (top-N + "(other)") | time (freq)
+        |
+        v
+  materialize()      ordered categorical Series of level labels
+        |            ("(other)" and "(null)" always sort last)
+        v
+  build_table()       group by row x col labels, aggregate the measure
+        |             pandas pivot_table  -- or --  engine="duckdb" SQL
+        v
+  pivot table (rows x cols)  <===== .toggle() =====>  histogram table (bins x series)
+        |
+        +-- .style(heat=...)          --> heatmap HTML / SVG bars
+        +-- .anomalies()              --> row/col independence residuals (surprise)
+        +-- .distribution(col)        --> best-fit probability family, by BIC
+        +-- .modes(col)               --> Gaussian-mixture peaks (component count by BIC)
+        +-- p2h.regimes(state, ...)   --> HMM-decoded regime column, itself a View
+        +-- p2h.dependencies(df)      --> pairwise column mutual-information, a View
+        +-- .cluster() / .cocluster() --> row / row+col groups
+                                          (k-means, DBSCAN, HDBSCAN, GMM, spectral, MCL)
+```
 
 ## Type guessing
 
@@ -99,10 +192,22 @@ p2h.fit(df, pin=["country"])                                  # must appear some
 p2h.fit(df, prefer_rows=["timestamp"], prefer_cols=["action"])
 p2h.fit(df, weights={"layers": 2.0, "mutual_info": 4.0})      # re-weight the score
 p2h.fit(df, bins="kmeans")                                    # density-driven natural breaks
+p2h.fit(df, objective="bic")                                  # BIC scoring, see below
 p2h.suggest(df, 5)                                            # ranked alternatives
 ```
 
 Every scoring term and its default weight is in `p2h.DEFAULT_WEIGHTS`.
+
+**Objective**: `objective="bic"` swaps the raw mutual-information term for a proper
+model-selection question - is this layout's row/column association strong enough to be
+worth the table's own complexity? It's the classical BIC comparison of the saturated
+table against independence, per observation: the log-likelihood-ratio/G-test statistic
+(`2 * mutual_info`) minus the table's extra degrees of freedom over independence
+(`(rows - 1) * (cols - 1)`) at the usual `log(n)` cost each. The same mutual information
+is worth far less on a 30x10 table than on a 3x3 one, so `"bic"` tends to prefer more
+parsimonious layouts on smaller samples and gets more permissive as evidence accumulates.
+Every other scoring term (sparsity, aspect, layers, priors ...) is unchanged; the default
+stays `"heuristic"`.
 
 Example (`p2h.sample.firewall_logs()`, `max_rows=8, max_cols=5`, text rendering):
 
@@ -272,6 +377,21 @@ fit          92,436 rows x 11 cols -> sum(bytes) by dst_ip (top 39) x rule    2.
 pivot        sum(bytes) by dst_ip (top 39) x rule -> 40 x 8    0.71s  cpu  0.88s  mem    +44 MB
 ```
 
+**Engine**: `engine="duckdb"` (`pip install "pivot2hist[duckdb]"`) runs the group-by/
+aggregate that builds the table as SQL against DuckDB instead of `pandas.pivot_table`,
+for the dim kinds it can express there (categorical, binned, plain time buckets) - a
+semantic drill level or a cyclic time bucket fall back to pandas for that layout, same
+result either way. It's an alternate engine for SQL semantics and DuckDB-pipeline
+interop, not a guaranteed speedup: pandas' own vectorized pivot is already fast for an
+in-memory frame, and registering one with DuckDB has a real cost of its own (amortized
+across repeated queries on the same frame via a small connection cache, but still paid
+on the first one).
+
+```python
+p2h.fit(df, engine="duckdb")
+v.pivot()   # same numbers either way; v.options.engine is "pandas" unless you asked
+```
+
 ## Log and stats
 
 `p2h.verbose()` prints every major step (survey, plan, sample, pages, fit, pivot, cluster,
@@ -302,7 +422,40 @@ normalised matrix, block count from the eigengap) or `v.cocluster(method="mcl")`
 clustering: random walks on the bipartite row-column graph, expansion and inflation until
 they settle). `nest=False` only reorders the axes instead of adding block levels.
 
+**Regimes**: a chain shows what follows what; `p2h.regimes()` goes one step further and
+asks whether an entity's sequence is drifting between a small number of hidden *behavioural
+states* - a user's logins settling into a "normal" regime most of the time, then switching
+into a "credential-stuffing" regime for a stretch. A Baum-Welch fit (scaled forward-
+backward EM, multi-sequence, no hmmlearn/scipy) trains a categorical-emission HMM per
+`by`-grouped sequence; the regime count is chosen by BIC (like `fit_distribution` and
+`modes()`) unless you fix it, and Viterbi decodes the most likely regime per row.
+
+```python
+p2h.regimes(df, "event", by="user", time="timestamp")            # rows = regime, cols = event
+p2h.regimes(df, "event", by="user", time="timestamp", n_states=3) # fix the regime count
+from pivot2hist import decode_regimes, fit_hmm
+decode_regimes(df, "event", by="user", time="timestamp")          # just the regime Series
+```
+
+Like every other collection feature here, `p2h.regimes()` returns a `View` - `.toggle()`
+it to a histogram, `.slice()` it, style it, the same as any other pivot.
+
 ## Density clustering
+
+`method="gmm"` fits a Gaussian mixture (EM, k-means++ seeded, component count chosen by
+BIC unless you fix `k`) instead of hard k-means - useful when clusters overlap or have
+different spreads. The same machinery powers `bins="mixture"` (bin edges at the valleys
+between fitted components, instead of equal-width or quantile bins) and `p2h.modes(df,
+"bytes")` / `v.modes("bytes")`, which just answers "how many peaks does this column have,
+and where" as a list of `{"weight", "mean", "std"}` dicts - e.g. two components at ~200 B
+and ~5 KB for a bimodal transfer-size column, with no scipy/sklearn dependency.
+
+```python
+v.cluster(method="gmm")                        # auto k by BIC
+v.cluster(k=3, method="gmm", on=["bytes", "duration"])
+p2h.histogram(df, "bytes", bins="mixture")      # bin edges at the mixture's valleys
+p2h.modes(df, "bytes")                          # [{"weight": .62, "mean": 210.4, "std": 38.1}, ...]
+```
 
 `method="dbscan"` clusters by density with an automatic radius (knee of the k-distance
 curve); outliers become a `noise` label, which is what you want for scanners and odd
@@ -314,6 +467,25 @@ v.cluster(method="dbscan")                     # pivot rows; noise rows grouped 
 v.cluster(on=["bytes", "duration"], method="hdbscan")
 p2h.cluster(df, ["bytes", "duration"], method="dbscan")
 ```
+
+## Dependency map
+
+`p2h.dependencies(df)` answers "which columns move together" as a square pivot: rows and
+columns are both the column names, cells are normalized mutual information (0..1). Unlike
+a correlation matrix, it makes no linearity or numeric-only assumption - every column is
+discretized (numeric/datetime into quantile bins, categorical/boolean by top-N) and scored
+by bias-corrected mutual information (the same Miller-Madow correction the auto-fit search
+already uses), so a categorical/numeric pair like `protocol` and `dst_port` shows up just
+as well as two numeric ones.
+
+```python
+p2h.dependencies(df)                              # every non-constant, non-id column, capped to 30
+p2h.dependencies(df, columns=["method", "mfa", "event"])  # just these
+p2h.mutual_info_matrix(df)                         # the plain DataFrame, if you don't want a View
+```
+
+It's a `View` like everything else: `.toggle()` gives a histogram of each column's total
+association with the rest, `.style(heat="table")` highlights the strongest pairs.
 
 ## Anomalies, distributions and confidence
 
@@ -378,7 +550,11 @@ into **Rows** / **Columns** / **Values** / **Slicers**. Drop more than one field
 axis for rows within rows or columns within columns, in the order you drop them; the
 Layout tab and the Fields pane stay in sync either way. Falls back to plain dropdowns and
 move/remove buttons when `anywidget` isn't installed, with the same
-`rows`/`cols`/`values`/`slicers` interface either way.
+`rows`/`cols`/`values`/`slicers` interface either way. The Slicers *tab* only pre-builds a
+capped set of quick filters so wide tables stay readable, but dropping any other field —
+any kind, any column — into the Fields tab's **Slicers** zone builds and wires up a real
+one on the spot (multi-select for labels, a percentile range for numbers, a date range),
+not just for the pre-built handful.
 
 **Theme**: `v.style(theme="graphite")` (or the Style tab's Theme dropdown) switches every
 rendered surface — the heatmap, the histogram, the Fields pane, the log panel, and (for
@@ -474,6 +650,8 @@ cat data.csv | pivot2hist -
 | `search_width` | 7 | columns entering the search (time, pinned and preferred always do) |
 | `exclude` | `()` | columns never used |
 | `max_categories`, `discrete_max`, `id_ratio` | 50, 20, 0.5 | profiling thresholds |
+| `engine` | `"pandas"` | `"duckdb"` runs the table build as SQL against DuckDB |
+| `objective` | `"heuristic"` | `"bic"` scores row/column association by BIC model selection |
 
 ## Performance
 
