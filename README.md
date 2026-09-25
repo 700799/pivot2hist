@@ -31,6 +31,7 @@ p2h.chains(df, "event", by="user", time="timestamp")   # Markov transition matri
 p2h.regimes(df, "event", by="user", time="timestamp")  # HMM-decoded behavioural regimes, as a pivot
 p2h.dependencies(df)               # which columns move together, as a pivot (mutual information)
 p2h.verbose(); p2h.stats(7)        # scrolling step log; the seven costliest steps
+v.llm_context()                    # description + metadata + a markdown table, sized for a model's context
 p2h.agent.pivot("firewall.csv", rows=["src_ip"], filters=[{"column": "action", "eq": "deny"}])  # plain JSON, for LLM agents
 ```
 
@@ -539,9 +540,10 @@ for labels, percentile range sliders for numbers, date ranges, a query box, top-
 Reduce & cluster (sample, cluster k / method / on / collapse, co-cluster, coarser /
 finer), Chains (state, entity, time, probabilities, plus the most frequent 3-step
 chains), Style (theme, heat incl. `surprise`, totals, subtotals, outline, bars, compact),
-Code (the Python reproducing the current view), Profile, Data (the survey and plan) and
-Stats (the seven costliest steps). A scrolling log of major steps sits under the output.
-`explorer.snapshot_html()` renders a static picture of the interface for docs or sharing.
+Code (the Python reproducing the current view), Profile, Data (the survey and plan),
+Stats (the seven costliest steps) and **Timeline** (checkpoints, see below). A scrolling
+log of major steps sits under the output. `explorer.snapshot_html()` renders a static
+picture of the interface for docs or sharing.
 
 **Fields tab**: every column as a draggable chip — kind, semantic type, non-null count
 (`n`), distinct count (`≠`) and *variety* (distinct ÷ non-null, as a small bar:
@@ -555,6 +557,39 @@ capped set of quick filters so wide tables stay readable, but dropping any other
 any kind, any column — into the Fields tab's **Slicers** zone builds and wires up a real
 one on the spot (multi-select for labels, a percentile range for numbers, a date range),
 not just for the pre-built handful.
+
+**Paint fields**: click a chip's colored dot to cycle it through a highlight palette (or
+`explorer.paint("src_ip", "red")` / `explorer.unmark("src_ip")` from code — any
+`MARK_PALETTE` name or CSS color). Marks are cosmetic bookkeeping (they never touch the
+fitted layout or the data) meant for calling out "this field is the interesting one" while
+you work; they carry through `clone()`, undo, and saved checkpoints. Works the same way
+in the ipywidgets fallback, as a per-field dropdown.
+
+**Timeline & checkpoints**: `explorer.save_checkpoint("clean baseline, all traffic")`
+bookmarks the whole recipe (layout, slices, style, cluster/chain settings, field marks —
+everything undo tracks) with a note. The Timeline tab's slider re-renders the view at
+whichever checkpoint you land on, one notch at a time, so you can scrub back and forth
+through your own analysis history; its linked ▶ Play button steps through every
+checkpoint automatically for a simple annotated playback. `explorer.goto_checkpoint(idx)`
+does the same thing from code (negative indexes from the end, like a list).
+
+```python
+explorer = p2h.explore(df)
+# ... shape the layout, slice down, style it ...
+explorer.save_checkpoint("clean baseline")
+# ... slice to a suspicious host, try a few things ...
+explorer.save_checkpoint("host 10.0.4.12 spike investigation")
+explorer.goto_checkpoint(0)     # back to the baseline, or just drag the Timeline slider
+```
+
+**Clone**: re-profiling a wide or large frame is real work, and every `p2h.explore(df)`
+call normally does it again. `explorer.clone()` opens a second, independent explorer
+(for a second notebook cell) that shares this one's already-computed profile and
+underlying frame — no re-profiling, no data copy — starting from the same layout (or
+`clone(view=other_view)` for a different one) and carrying over field marks, but with
+its own fresh undo history and timeline so the two cells can't step on each other.
+`View.clone()` does the same thing for a plain (non-widget) `View`, for the same reason:
+fan one loaded/profiled dataset out into several independent variables cheaply.
 
 **Theme**: `v.style(theme="graphite")` (or the Style tab's Theme dropdown) switches every
 rendered surface — the heatmap, the histogram, the Fields pane, the log panel, and (for
@@ -594,6 +629,25 @@ the same as in a notebook, and a paged result says `"paged": true` (`count`/`sum
 `max`/`mean` stay exact; other aggregations fall back to a sample and say
 `"approximate": true`).
 
+**Feeding a model the result itself**: `agent.pivot()`'s `table` is a list of row
+records — fine for code, wasteful as *context* (JSON repeats every column name once per
+row, and a model has to reconstruct the table's shape from a flat list). `agent.llm_context()`
+(same arguments) returns `{"description", "metadata", "table"}` instead: a short
+natural-language summary, compact facts scoped to just the columns involved (not a full
+profile dump), and the table itself as a GitHub-flavored markdown string, truncated (not
+sampled) to a row/column budget — markdown because it's both what a model has seen the
+most of and the cheapest in tokens.
+
+```python
+agent.llm_context("events.parquet", rows=["src_ip"], cols=["action"])
+# {"description": "Pivot table of 50,000 rows: count by src_ip (top 39) x action. ...",
+#  "metadata": {"measure": "count", "shape": {"rows": 40, "cols": 4}, "columns": {...}, ...},
+#  "table": "| src_ip (top 39) | allow | deny | ... |\n|---|---|---|...|\n| ... |"}
+```
+
+Prefer `pivot()` when the result feeds back into your own code; prefer `llm_context()`
+when it's headed into a model's context window instead.
+
 **MCP server** (`pip install "pivot2hist[mcp]"`) exposes the same operations to any
 MCP client — Claude Code, Claude Desktop, or your own agent:
 
@@ -604,7 +658,8 @@ python -m pivot2hist.mcp_server   # the same thing
 
 Tools: `describe(source, columns=, memory_budget_mb=, distributions=)`,
 `pivot(source, rows=, cols=, values=, agg=, filters=, mode=, on=, by=, bins=, max_rows=,
-max_cols=, memory_budget_mb=)`, `suggest(source, n=, filters=)`,
+max_cols=, memory_budget_mb=)`, `llm_context(...)` (same arguments as `pivot`, plus
+`table_max_rows=`/`table_max_cols=`), `suggest(source, n=, filters=)`,
 `slicers(source, columns=, top=)`, `anomalies(source, n=, rows=, cols=, filters=)`.
 Works against both `mcp<2` (`FastMCP`) and `mcp>=2` (`MCPServer`) — whichever is
 installed.
@@ -614,7 +669,24 @@ installed.
 `p2h.load()` accepts a DataFrame or Series, a file path (csv, tsv, json, jsonl, parquet,
 xlsx, feather, optionally compressed), a list of dicts, a dict of lists or a 2-D numpy
 array. Text timestamps, epoch integers, numeric strings and yes/no strings are converted
-(`parse_dates=False`, `infer_types=False` to skip).
+(`parse_dates=False`, `infer_types=False` to skip). Non-string column names are stringified,
+duplicates get a `.1`/`.2` suffix, and a `DatetimeIndex` becomes a plain column — real
+data rarely has clean column names, so this happens automatically rather than raising.
+
+**Safety with messy real-world data.** Every pandas dtype is expected to work: the
+usual numeric/text/bool/datetime kinds, the nullable extension dtypes (`Int64`,
+`boolean`, `string`, `Float64` — nulls stay null, never silently become `0`/`False`/
+`"nan"`), categorical (including unused categories), sparse, and `object` columns
+holding almost anything — mixed types, `bytes`, `datetime.date`, even unhashable values
+like lists or dicts in a cell (stringified automatically the moment something needs to
+hash them, e.g. to build a category; the rest of the pipeline never sees the raw
+unhashable value). `inf`/`-inf`, extreme magnitudes, all-null columns, a single row, a
+single column, an empty frame, duplicate or non-string column names, mismatched
+tz-aware/naive datetimes — all either work as you'd expect or fail with a specific,
+pivot2hist-level message (never a bare `KeyError`/`IndexError` from three modules deep
+in pandas or numpy) naming what's wrong and, where relevant, what's accepted instead.
+`tests/test_robustness.py` is the record of this: every case there traces back to a bug
+that was actually found and fixed, not a hypothetical.
 
 ## CLI
 
