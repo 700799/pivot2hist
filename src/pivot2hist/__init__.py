@@ -44,7 +44,7 @@ from ._explain import Explanation
 from ._prompt import DEFAULT_QUESTION, Prompt
 from ._sparkline import sparkline_table
 
-__version__ = "0.18.0"
+__version__ = "0.19.0"
 
 _PLANNED_KEYS = ("memory_budget_mb", "mode", "columns", "query", "table", "sample_rows", "page_rows")
 

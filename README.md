@@ -783,9 +783,13 @@ clickable there. A scrolling log of major steps sits under the output. `explorer
 picture of the interface for docs or sharing.
 
 **Fields tab**: every column as a draggable chip — kind, semantic type, non-null count
-(`n`), distinct count (`≠`) and *variety* (distinct ÷ non-null, as a small bar:
-a handful of repeated labels reads near-empty, an id-like column reads full) — dropped
-into **Rows** / **Columns** / **Values** / **Slicers**. Drop more than one field on an
+(`n`), distinct count (`≠`), *variety* (distinct ÷ non-null, as a small bar:
+a handful of repeated labels reads near-empty, an id-like column reads full) and, for a
+numeric or datetime column with enough spread, a small **glyph**: a value-distribution
+histogram for numeric, a row-count-over-time trend for datetime (`p2h.ui_fields.field_stats(profile, df)`
+computes it; `make_field_list(profile, df, ...)` wires it into the pane — skip `df` for
+the old, glyph-free chips) — dropped into **Rows** / **Columns** / **Values** /
+**Slicers**. Drop more than one field on an
 axis for rows within rows or columns within columns, in the order you drop them; the
 Layout tab and the Fields pane stay in sync either way. Falls back to plain dropdowns and
 move/remove buttons when `anywidget` isn't installed, with the same

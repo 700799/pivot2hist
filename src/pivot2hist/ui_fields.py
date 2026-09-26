@@ -17,16 +17,22 @@ distinct values as a share of the rows (1.0 = every row different, like an id;
 from __future__ import annotations
 
 import html as _html
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import ipywidgets as W
+import numpy as np
+import pandas as pd
 import traitlets as T
 
-from ._profile import Profile
+from . import _binning as B
+from ._profile import DATETIME, NUMERIC, ColumnProfile, Profile
 
 KIND_COLORS = {"categorical": "#0072B2", "numeric": "#009E73", "datetime": "#E69F00", "boolean": "#CC79A7", "id": "#999999", "constant": "#bbbbbb"}
 ZONES = ("rows", "cols", "values", "slicers")
 ZONE_TITLES = {"rows": "Rows", "cols": "Columns", "values": "Values", "slicers": "Slicers"}
+
+_GLYPH_POINTS = 12
+_GLYPH_SAMPLE_CAP = 20_000
 
 #: Named highlight colors for :func:`chip_html`'s ``mark``/the ``marks`` trait. Any CSS
 #: color string works too (``"#123abc"``, ``"tomato"``) - these are just a convenient,
@@ -37,11 +43,68 @@ MARK_PALETTE: Dict[str, str] = {
 }
 
 
-def field_stats(profile: Profile) -> List[Dict[str, Any]]:
-    """One dict per column: name, kind, semantic, count, distinct, variety, nulls, examples."""
+def _numeric_glyph(s: pd.Series, *, seed: int = 0) -> Optional[List[float]]:
+    """A ``_GLYPH_POINTS``-bar relative histogram (0..1, tallest bar = 1) of ``s``'s
+    values, or ``None`` when there's too little data or spread to show one."""
+    x = pd.to_numeric(s, errors="coerce").to_numpy(dtype=float)
+    x = x[np.isfinite(x)]
+    if x.size < 5:
+        return None
+    if x.size > _GLYPH_SAMPLE_CAP:
+        x = np.random.default_rng(seed).choice(x, _GLYPH_SAMPLE_CAP, replace=False)
+    lo, hi = float(x.min()), float(x.max())
+    if hi <= lo:
+        return None
+    counts, _ = np.histogram(x, bins=_GLYPH_POINTS, range=(lo, hi))
+    peak = float(counts.max())
+    return [round(float(c) / peak, 4) for c in counts] if peak > 0 else None
+
+
+def _datetime_glyph(s: pd.Series) -> Optional[List[float]]:
+    """A ``_GLYPH_POINTS``-bar relative histogram of row counts over time (auto-coarsened
+    the same way :func:`pivot2hist.View.histogram` buckets a time column)."""
+    valid = s.dropna()
+    if valid.size < 5:
+        return None
+    freq = B.time_freq_for(valid, _GLYPH_POINTS)
+    bucket = B.bucket_time(s, freq)
+    cats = [c for c in bucket.cat.categories if c != B.NULL]
+    if len(cats) < 2:
+        return None
+    vc = bucket.value_counts()
+    vals = [float(vc.get(c, 0)) for c in cats]
+    peak = max(vals) if vals else 0.0
+    return [round(v / peak, 4) for v in vals] if peak > 0 else None
+
+
+def _column_glyph(df: pd.DataFrame, cp: ColumnProfile) -> Tuple[Optional[List[float]], Optional[str]]:
+    """(glyph bars, ``"hist"``/``"trend"``) for one column, or ``(None, None)`` when the
+    kind has no glyph (categorical already has the variety bar) or there isn't enough
+    data - never raises, since this is cosmetic."""
+    if cp.name not in df.columns:
+        return None, None
+    try:
+        if cp.kind == NUMERIC:
+            g = _numeric_glyph(df[cp.name])
+            return (g, "hist") if g else (None, None)
+        if cp.kind == DATETIME:
+            g = _datetime_glyph(df[cp.name])
+            return (g, "trend") if g else (None, None)
+    except (TypeError, ValueError):
+        pass
+    return None, None
+
+
+def field_stats(profile: Profile, df: Optional[pd.DataFrame] = None) -> List[Dict[str, Any]]:
+    """One dict per column: name, kind, semantic, count, distinct, variety, nulls,
+    examples - and, when ``df`` is given, a small ``glyph`` (``_GLYPH_POINTS`` relative
+    bar heights, 0..1) for numeric columns (a value-distribution histogram, ``glyph_kind
+    "hist"``) and datetime columns (row count over time, ``"trend"``); ``None`` for
+    everything else, or when there isn't enough data to make one worth showing."""
     out = []
     for c in profile:
         count = int(round(c.n * (1 - c.null_frac)))
+        glyph, glyph_kind = _column_glyph(df, c) if df is not None else (None, None)
         out.append(
             {
                 "name": c.name,
@@ -53,6 +116,8 @@ def field_stats(profile: Profile) -> List[Dict[str, Any]]:
                 "nulls": round(c.null_frac, 4),
                 "examples": ", ".join(c.examples[:3]),
                 "ts": c.ts_freq or "",
+                "glyph": glyph,
+                "glyph_kind": glyph_kind,
             }
         )
     return out
@@ -78,12 +143,32 @@ def _fmt_n(n: float) -> str:
     return f"{int(n)}"
 
 
+def glyph_svg(values: Optional[Sequence[float]], kind: Optional[str], *, width: int = 40, height: int = 14, color: str = "#888") -> str:
+    """A tiny inline-SVG glyph for a chip: bars for a value-distribution histogram
+    (``kind="hist"``) or a line for a count-over-time trend (``kind="trend"``); ``""``
+    when there's nothing to draw."""
+    if not values:
+        return ""
+    n = len(values)
+    if kind == "trend":
+        step = width / max(1, n - 1)
+        pts = " ".join(f"{i * step:.1f},{(height - 2) - v * (height - 4):.1f}" for i, v in enumerate(values))
+        return f"<svg width='{width}' height='{height}'><polyline points='{pts}' fill='none' stroke='{color}' stroke-width='1.2' stroke-linejoin='round'/></svg>"
+    bw = width / n
+    bars = []
+    for i, v in enumerate(values):
+        h = max(1.0, v * (height - 2))
+        bars.append(f"<rect x='{i * bw:.1f}' y='{height - h:.1f}' width='{max(bw - 1, 1):.1f}' height='{h:.1f}' fill='{color}' opacity='0.75'/>")
+    return f"<svg width='{width}' height='{height}'>{''.join(bars)}</svg>"
+
+
 def chip_html(f: Dict[str, Any], *, removable: bool = False, drag: bool = True, mark: Optional[str] = None) -> str:
     """Static HTML for one field chip (used by the fallback and by snapshots).
 
     ``mark`` is a CSS color (see :data:`MARK_PALETTE` for named ones) painted as a left
     border and a faint background tint, so a highlighted field stays visible even in a
-    plain HTML snapshot with no interactivity.
+    plain HTML snapshot with no interactivity. A numeric or datetime field with enough
+    data carries a small distribution/trend ``glyph`` (see :func:`glyph_svg`).
     """
     color = KIND_COLORS.get(f["kind"], "#888")
     kind = f["kind"] + (f" · {f['semantic']}" if f.get("semantic") else "") + (f" · {f['ts']}" if f.get("ts") else "")
@@ -93,6 +178,8 @@ def chip_html(f: Dict[str, Any], *, removable: bool = False, drag: bool = True, 
         title += _html.escape(f" — marked {mark}")
     x = "<span class='p2h-x' title='remove'>×</span>" if removable else ""
     mark_style = f"border-left:4px solid {_html.escape(mark)};box-shadow:0 0 0 1px {_html.escape(mark)} inset" if mark else ""
+    glyph = glyph_svg(f.get("glyph"), f.get("glyph_kind"), color=color)
+    glyph_title = " title='value distribution'" if f.get("glyph_kind") == "hist" else (" title='row count over time'" if f.get("glyph_kind") == "trend" else "")
     return (
         f"<div class='p2h-chip' draggable='{'true' if drag else 'false'}' data-name='{_html.escape(f['name'])}' title='{title}' style='{mark_style}'>"
         f"<span class='p2h-dot' style='background:{color}'></span>"
@@ -100,7 +187,8 @@ def chip_html(f: Dict[str, Any], *, removable: bool = False, drag: bool = True, 
         f"<span class='p2h-kind'>{_html.escape(kind)}</span>"
         f"<span class='p2h-stat' title='non-null count'>n {_fmt_n(f['count'])}</span>"
         f"<span class='p2h-stat' title='distinct values'>≠ {_fmt_n(f['distinct'])}</span>"
-        f"<span class='p2h-var' title='variety: distinct / rows'><span style='width:{pct}%'></span></span>{x}</div>"
+        f"<span class='p2h-var' title='variety: distinct / rows'><span style='width:{pct}%'></span></span>"
+        f"<span class='p2h-glyph'{glyph_title}>{glyph}</span>{x}</div>"
     )
 
 
@@ -169,7 +257,7 @@ FIELDS_CSS = """
 .p2h-zone-body{flex:1;display:flex;flex-direction:column;gap:4px;padding:6px;border:1px dashed var(--p2h-border,#cfd6df);border-radius:10px;background:var(--p2h-panel,#fbfcfd);min-height:40px;transition:border-color .12s,background .12s}
 .p2h-zone-body.p2h-over,.p2h-pool-body.p2h-over{border-color:var(--p2h-accent,#0072B2);background:var(--p2h-accent-soft,#e8f1fa)}
 .p2h-hint{color:var(--p2h-hint,#99a);font-style:italic;padding:2px 4px}
-.p2h-chip{display:grid;grid-template-columns:8px minmax(70px,1.4fr) minmax(60px,1fr) auto auto 46px auto;gap:6px;align-items:center;padding:4px 8px;border-radius:8px;background:var(--p2h-chip,#fff);color:var(--p2h-text,#1f2937);border:1px solid var(--p2h-border,#dfe4ea);cursor:grab;box-shadow:0 1px 2px rgba(0,0,0,.06);transition:box-shadow .12s,transform .12s}
+.p2h-chip{display:grid;grid-template-columns:8px minmax(70px,1.4fr) minmax(60px,1fr) auto auto 46px 42px auto;gap:6px;align-items:center;padding:4px 8px;border-radius:8px;background:var(--p2h-chip,#fff);color:var(--p2h-text,#1f2937);border:1px solid var(--p2h-border,#dfe4ea);cursor:grab;box-shadow:0 1px 2px rgba(0,0,0,.06);transition:box-shadow .12s,transform .12s}
 .p2h-chip:hover{box-shadow:0 2px 6px rgba(0,0,0,.12)}
 .p2h-chip.p2h-dragging{opacity:.5}
 .p2h-dot{width:8px;height:8px;border-radius:50%}
@@ -178,6 +266,8 @@ FIELDS_CSS = """
 .p2h-stat{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;color:var(--p2h-muted,#556);white-space:nowrap}
 .p2h-var{display:inline-block;height:6px;background:var(--p2h-var-track,#e5eaf0);border-radius:3px;overflow:hidden}
 .p2h-var span{display:block;height:6px;background:linear-gradient(90deg,#56B4E9,var(--p2h-accent,#0072B2))}
+.p2h-glyph{display:flex;align-items:center;height:14px;opacity:.9}
+.p2h-glyph:empty{visibility:hidden}
 .p2h-x{cursor:pointer;color:var(--p2h-hint,#99a);font-weight:700;padding:0 2px}.p2h-x:hover{color:var(--p2h-danger,#c00)}
 .p2h-search{font-size:11px;padding:3px 8px;border:1px solid var(--p2h-border,#dfe4ea);border-radius:8px;width:110px;background:var(--p2h-bg,#fff);color:var(--p2h-text,#1f2937)}
 """
@@ -212,6 +302,21 @@ function render({ model, el }) {
     if (next) marks[name] = next; else delete marks[name];
     model.set("marks", marks); model.save_changes(); draw();
   }
+  function glyphSvg(values, kind, color) {
+    if (!values || !values.length) return "";
+    const width = 40, height = 14, n = values.length;
+    if (kind === "trend") {
+      const step = width / Math.max(1, n - 1);
+      const pts = values.map((v, i) => `${(i * step).toFixed(1)},${((height - 2) - v * (height - 4)).toFixed(1)}`).join(" ");
+      return `<svg width='${width}' height='${height}'><polyline points='${pts}' fill='none' stroke='${color}' stroke-width='1.2' stroke-linejoin='round'/></svg>`;
+    }
+    const bw = width / n;
+    const bars = values.map((v, i) => {
+      const h = Math.max(1, v * (height - 2));
+      return `<rect x='${(i * bw).toFixed(1)}' y='${(height - h).toFixed(1)}' width='${Math.max(bw - 1, 1).toFixed(1)}' height='${h.toFixed(1)}' fill='${color}' opacity='0.75'/>`;
+    }).join("");
+    return `<svg width='${width}' height='${height}'>${bars}</svg>`;
+  }
   function chip(f, removable) {
     const d = document.createElement("div");
     d.className = "p2h-chip"; d.draggable = true; d.dataset.name = f.name;
@@ -220,7 +325,8 @@ function render({ model, el }) {
     const mark = (model.get("marks") || {})[f.name];
     if (mark) { d.style.borderLeft = `4px solid ${mark}`; d.style.boxShadow = `0 0 0 1px ${mark} inset`; }
     d.title = `${f.name}: ${kind}; ${f.count.toLocaleString()} non-null, ${f.distinct.toLocaleString()} distinct (variety ${(f.variety * 100).toFixed(2)}%), nulls ${(f.nulls * 100).toFixed(1)}%; e.g. ${f.examples || ""}` + (mark ? ` — marked (click the dot to cycle/clear)` : ` — click the dot to highlight`);
-    d.innerHTML = `<span class='p2h-dot' style='background:${COLORS[f.kind] || "#888"};cursor:pointer' title='click to highlight'></span><span class='p2h-name'>${esc(f.name)}</span><span class='p2h-kind'>${esc(kind)}</span><span class='p2h-stat'>n ${fmt(f.count)}</span><span class='p2h-stat'>≠ ${fmt(f.distinct)}</span><span class='p2h-var'><span style='width:${pct}%'></span></span>${removable ? "<span class='p2h-x' title='remove'>×</span>" : ""}`;
+    const glyphTitle = f.glyph_kind === "hist" ? "value distribution" : f.glyph_kind === "trend" ? "row count over time" : "";
+    d.innerHTML = `<span class='p2h-dot' style='background:${COLORS[f.kind] || "#888"};cursor:pointer' title='click to highlight'></span><span class='p2h-name'>${esc(f.name)}</span><span class='p2h-kind'>${esc(kind)}</span><span class='p2h-stat'>n ${fmt(f.count)}</span><span class='p2h-stat'>≠ ${fmt(f.distinct)}</span><span class='p2h-var'><span style='width:${pct}%'></span></span><span class='p2h-glyph' title='${esc(glyphTitle)}'>${glyphSvg(f.glyph, f.glyph_kind, COLORS[f.kind] || "#888")}</span>${removable ? "<span class='p2h-x' title='remove'>×</span>" : ""}`;
     d.addEventListener("dragstart", (e) => { e.dataTransfer.setData("text/plain", f.name); e.dataTransfer.effectAllowed = "move"; d.classList.add("p2h-dragging"); });
     d.addEventListener("dragend", () => d.classList.remove("p2h-dragging"));
     d.querySelector(".p2h-dot").addEventListener("click", (e) => { e.stopPropagation(); cycleMark(f.name); });
@@ -440,11 +546,13 @@ class FieldListFallback(W.VBox):
         return zones_html(self.fields, {z: list(getattr(self, z)) for z in ZONES}, interactive=False, theme=self.theme, marks=self.marks)
 
 
-def make_field_list(profile: Profile, *, prefer_anywidget: bool = True, theme: str = "light",
+def make_field_list(profile: Profile, df: Optional[pd.DataFrame] = None, *, prefer_anywidget: bool = True, theme: str = "light",
                      marks: Optional[Dict[str, str]] = None, **zones: Sequence[str]):
-    """The best available fields pane for ``profile``. ``marks``: column name -> CSS
-    color (or a :data:`MARK_PALETTE` name), for fields already highlighted."""
-    fields = field_stats(profile)
+    """The best available fields pane for ``profile``. ``df`` (optional) adds a small
+    distribution/trend glyph to numeric and datetime chips - see :func:`field_stats`.
+    ``marks``: column name -> CSS color (or a :data:`MARK_PALETTE` name), for fields
+    already highlighted."""
+    fields = field_stats(profile, df)
     if prefer_anywidget and HAS_ANYWIDGET and FieldList is not None:
         w = FieldList(fields=fields, theme=theme)
         w.set_zones(**zones)
@@ -458,6 +566,6 @@ def make_field_list(profile: Profile, *, prefer_anywidget: bool = True, theme: s
 
 
 __all__ = [
-    "FieldList", "FieldListFallback", "make_field_list", "field_stats", "chip_html", "zones_html",
+    "FieldList", "FieldListFallback", "make_field_list", "field_stats", "chip_html", "glyph_svg", "zones_html",
     "theme_style_block", "FIELDS_CSS", "FIELD_THEMES", "ZONES", "HAS_ANYWIDGET", "MARK_PALETTE",
 ]

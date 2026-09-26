@@ -708,3 +708,11 @@ def test_sparkline_survives_undo_reset(ex):
     ex.w_sparkline.value = "timestamp"
     ex.w_reset.click()
     assert ex.w_sparkline.value is None and "<svg" not in ex.w_out.value
+
+
+def test_fields_tab_chips_get_glyphs_from_the_source(ex):
+    by = {f["name"]: f for f in ex.w_fields.fields}
+    assert by["bytes"]["glyph_kind"] == "hist" and by["timestamp"]["glyph_kind"] == "trend"
+    assert by["action"]["glyph"] is None
+    snap = ex.snapshot_html(active_tab="Fields")
+    assert "<svg" in snap

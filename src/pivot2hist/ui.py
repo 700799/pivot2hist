@@ -825,7 +825,7 @@ class Explorer:
         init_rows = [c for c in (_col_of(x) for x in (self.spec.get("rows") or [])) if c]
         init_cols = [c for c in (_col_of(x) for x in (self.spec.get("cols") or [])) if c]
         init_values = [self.spec["values"]] if self.spec.get("values") else []
-        self.w_fields = make_field_list(prof, theme=str(self.display.get("theme", "light")), rows=init_rows, cols=init_cols,
+        self.w_fields = make_field_list(prof, self._source, theme=str(self.display.get("theme", "light")), rows=init_rows, cols=init_cols,
                                         values=init_values, slicers=list(self.field_slicers), marks=dict(self.marks))
         self.w_fields.observe(self._on_fields, names=["rows", "cols", "values", "slicers"])
         self.w_field_slicer_box = W.VBox()

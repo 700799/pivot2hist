@@ -1,5 +1,6 @@
 import xml.dom.minidom
 
+import pandas as pd
 import pytest
 
 import pivot2hist as p2h
@@ -11,6 +12,7 @@ from pivot2hist.ui_fields import (
     FieldListFallback,
     chip_html,
     field_stats,
+    glyph_svg,
     make_field_list,
     theme_style_block,
     zones_html,
@@ -188,3 +190,84 @@ def test_gunmetal_field_theme_and_js_table():
     assert set(FIELD_THEMES["gunmetal"]) == set(FIELD_THEMES["graphite"])
     assert "--p2h-bg:#1f262d" in theme_style_block("gunmetal")
     assert "gunmetal: {" in _ESM and '"#1f262d"' in _ESM
+
+
+# --------------------------------------------------------------------------- chip glyphs
+
+
+@pytest.fixture(scope="module")
+def fw_df():
+    return p2h.sample.firewall_logs(2000, seed=1)
+
+
+def test_field_stats_glyph_only_for_numeric_and_datetime(prof, fw_df):
+    stats = field_stats(prof, fw_df)
+    by = {f["name"]: f for f in stats}
+    assert by["bytes"]["glyph_kind"] == "hist" and len(by["bytes"]["glyph"]) == 12
+    assert all(0.0 <= v <= 1.0 for v in by["bytes"]["glyph"]) and max(by["bytes"]["glyph"]) == 1.0
+    assert by["timestamp"]["glyph_kind"] == "trend" and len(by["timestamp"]["glyph"]) >= 2
+    for name in ("action", "src_ip", "protocol"):
+        assert by[name]["glyph"] is None and by[name]["glyph_kind"] is None
+
+
+def test_field_stats_without_df_has_no_glyphs(prof):
+    stats = field_stats(prof)
+    assert all(f["glyph"] is None and f["glyph_kind"] is None for f in stats)
+
+
+def test_field_stats_glyph_edge_cases():
+    const_df = pd.DataFrame({"a": [5] * 100, "b": range(100)})
+    prof_c = p2h.profile(const_df)
+    by = {f["name"]: f for f in field_stats(prof_c, const_df)}
+    assert by["a"]["glyph"] is None  # no spread: nothing to draw
+
+    tiny = pd.DataFrame({"a": [1, 2, 3]})
+    by_tiny = {f["name"]: f for f in field_stats(p2h.profile(tiny), tiny)}
+    assert by_tiny["a"]["glyph"] is None  # too few points
+
+    null_df = pd.DataFrame({"a": [None] * 50, "b": range(50)})
+    by_null = {f["name"]: f for f in field_stats(p2h.profile(null_df), null_df)}
+    assert by_null["a"]["glyph"] is None
+
+    single_time = pd.DataFrame({"t": [pd.Timestamp("2026-01-01")] * 50, "b": range(50)})
+    by_t = {f["name"]: f for f in field_stats(p2h.profile(single_time), single_time)}
+    assert by_t["t"]["glyph"] is None  # one bucket only: not a trend worth drawing
+
+
+def test_glyph_svg_hist_and_trend_and_empty():
+    hist = glyph_svg([0.2, 1.0, 0.5], "hist", color="#123")
+    assert hist.count("<rect") == 3 and "#123" in hist
+    trend = glyph_svg([0.0, 0.5, 1.0], "trend", color="#456")
+    assert "<polyline" in trend and "#456" in trend
+    assert glyph_svg(None, "hist") == "" and glyph_svg([], "trend") == ""
+
+
+def test_chip_html_renders_glyph_and_tolerates_missing_keys():
+    f = {"name": "bytes", "kind": "numeric", "semantic": "", "count": 100, "distinct": 80, "variety": 0.8,
+         "nulls": 0.0, "examples": "1, 2, 3", "ts": "", "glyph": [0.1, 0.5, 1.0], "glyph_kind": "hist"}
+    h = chip_html(f)
+    _xml_fragment(h)
+    assert "<svg" in h and "p2h-glyph" in h
+    no_glyph = {"name": "x", "kind": "categorical", "semantic": "", "count": 10, "distinct": 3, "variety": 0.3, "nulls": 0.0, "examples": "", "ts": ""}
+    h2 = chip_html(no_glyph)  # no "glyph"/"glyph_kind" keys at all
+    _xml_fragment(h2)
+    assert "<svg" not in h2
+
+
+def test_make_field_list_threads_df_to_glyphs(prof, fw_df):
+    fb = make_field_list(prof, fw_df, prefer_anywidget=False)
+    by = {f["name"]: f for f in fb.fields}
+    assert by["bytes"]["glyph_kind"] == "hist"
+    snap = fb.snapshot_html()
+    _xml_fragment(snap)
+    assert "<svg" in snap
+
+    fb_none = make_field_list(prof, prefer_anywidget=False)
+    assert all(f["glyph"] is None for f in fb_none.fields)
+
+
+@pytest.mark.skipif(not HAS_ANYWIDGET, reason="needs anywidget")
+def test_make_field_list_anywidget_has_glyphs(prof, fw_df):
+    w = make_field_list(prof, fw_df, prefer_anywidget=True)
+    by = {f["name"]: f for f in w.fields}
+    assert by["bytes"]["glyph_kind"] == "hist" and by["timestamp"]["glyph_kind"] == "trend"
