@@ -716,3 +716,21 @@ def test_fields_tab_chips_get_glyphs_from_the_source(ex):
     assert by["action"]["glyph"] is None
     snap = ex.snapshot_html(active_tab="Fields")
     assert "<svg" in snap
+
+
+def test_compare_tab_lists_drivers_under_the_heatmap(fw):
+    ex = p2h.explore(fw)
+    ex.compare(action="deny")
+    html = ex.w_cmp_out.value
+    assert "what else differs between" in html and "<li>" in html
+    assert "action=deny" in html and "rest" in html
+    # a comparison with nothing beyond the table says so instead of showing an empty list
+    import pandas as pd
+
+    class Quiet:
+        names = ("A", "B")
+
+        def drivers(self, k):
+            return pd.DataFrame(columns=["text"])
+
+    assert "nothing else differs" in Explorer._drivers_html(Quiet())

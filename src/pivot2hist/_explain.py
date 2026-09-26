@@ -126,36 +126,50 @@ def _fmt_ratio(r: float) -> str:
     return f"×{r:.2g}" if r < 10 else f"×{r:,.0f}"
 
 
-def distinguishing(cell: pd.DataFrame, rest: pd.DataFrame, profile: Any, *, exclude: Sequence[str] = (), k: int = 5) -> List[Dict[str, Any]]:
+def distinguishing(
+    cell: pd.DataFrame, rest: pd.DataFrame, profile: Any, *, exclude: Sequence[str] = (), k: int = 5,
+    labels: Optional[Tuple[str, str]] = None, symmetric: bool = False,
+) -> List[Dict[str, Any]]:
     """What sets ``cell``'s rows apart from ``rest``, best first: for a label column, the
     value most over-represented in the cell (its share here vs elsewhere, as a lift); for
     a numeric column, the median here vs elsewhere. Columns that name the cell are skipped.
     Scores: a label's share in the cell times ``|log2 lift|`` (common *and* distinctive
-    wins); a numeric's ``|log2(median ratio)|``. Small differences are dropped."""
+    wins); a numeric's ``|log2(median ratio)|``. Small differences are dropped.
+
+    ``symmetric=True`` treats the two sides as peers (a comparison rather than a cell and
+    its complement): the values most common on *either* side are candidates and a label's
+    score uses its larger share. ``labels`` names the sides in the ``text``."""
     if cell.empty or rest.empty:
         return []
     cell, rest = _sample(cell), _sample(rest)
     skip = set(exclude)
+    here, there = labels if labels else ("these rows", "elsewhere")
+    of_here, of_there = (f"of {here}", f"of {there}") if labels else ("of these rows", "elsewhere")
+    in_here, in_there = (f"in {here}", f"in {there}") if labels else ("here", "elsewhere")
     feats: List[Dict[str, Any]] = []
     for cp in profile:
         name = cp.name
         if name in skip or name not in cell.columns or name not in rest.columns:
             continue
         if cp.kind in (CATEGORICAL, BOOLEAN):
-            vc = B._hashable_column(cell[name]).value_counts(normalize=True, dropna=False).head(3)
+            vc = B._hashable_column(cell[name]).value_counts(normalize=True, dropna=False)
             vr = B._hashable_column(rest[name]).value_counts(normalize=True, dropna=False)
-            for val, sc in vc.items():
+            candidates = list(vc.head(3).items())
+            if symmetric:
+                seen = {v for v, _ in candidates}
+                candidates += [(v, float(vc.get(v, 0.0))) for v in vr.head(3).index if v not in seen]
+            for val, sc in candidates:
                 sr = float(vr.get(val, 0.0))
                 sc = float(sc)
                 lift = (sc + _EPS_SHARE) / (sr + _EPS_SHARE)
-                if 0.8 <= lift <= 1.25 or sc < 0.05:
+                if 0.8 <= lift <= 1.25 or max(sc, sr if symmetric else 0.0) < 0.05:
                     continue
                 shown = B.NULL if (isinstance(val, float) and np.isnan(val)) or val is None else str(val)
                 feats.append({
                     "column": name, "kind": "label", "value": shown,
                     "share_in_cell": round(sc, 4), "share_in_rest": round(sr, 4), "lift": round(lift, 3),
-                    "score": round(sc * abs(math.log2(lift)), 4),
-                    "text": f"`{name}` is {shown!r} for {sc:.0%} of these rows vs {sr:.0%} elsewhere ({_fmt_ratio(lift)})",
+                    "score": round((max(sc, sr) if symmetric else sc) * abs(math.log2(lift)), 4),
+                    "text": f"`{name}` is {shown!r} for {sc:.0%} {of_here} vs {sr:.0%} {of_there} ({_fmt_ratio(lift)})",
                 })
         elif cp.kind == NUMERIC:
             xc = pd.to_numeric(cell[name], errors="coerce").to_numpy(dtype=float)
@@ -180,7 +194,7 @@ def distinguishing(cell: pd.DataFrame, rest: pd.DataFrame, profile: Any, *, excl
             feats.append({
                 "column": name, "kind": "numeric", "median_in_cell": mc, "median_in_rest": mr,
                 "ratio": (None if math.isinf(ratio) else round(ratio, 4)), "score": round(score, 4),
-                "text": f"`{name}` median {human(mc)} here vs {human(mr)} elsewhere ({_fmt_ratio(ratio) if ratio else '×0'})",
+                "text": f"`{name}` median {human(mc)} {in_here} vs {human(mr)} {in_there} ({_fmt_ratio(ratio) if ratio else '×0'})",
             })
     feats.sort(key=lambda f: -f["score"])
     return feats[: max(0, int(k))]

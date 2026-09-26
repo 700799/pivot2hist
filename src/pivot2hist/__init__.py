@@ -43,8 +43,10 @@ from ._compare import ADDITIVE, METRICS, METRIC_HELP, Comparison, Facets
 from ._explain import Explanation
 from ._prompt import DEFAULT_QUESTION, Prompt
 from ._sparkline import sparkline_table
+from ._spikes import BASELINES as SPIKE_BASELINES
+from ._novelty import KINDS as NOVELTY_KINDS
 
-__version__ = "0.19.0"
+__version__ = "0.20.0"
 
 _PLANNED_KEYS = ("memory_budget_mb", "mode", "columns", "query", "table", "sample_rows", "page_rows")
 
@@ -220,6 +222,51 @@ def insights(
     """
     v = fit(data, rows=rows, cols=cols, values=values, agg=agg, **opts)
     return v.insights(sensitivity=sensitivity, max_findings=max_findings, max_pairs=max_pairs)
+
+
+def spikes(
+    data: Any,
+    column: Optional[str] = None,
+    *,
+    rows: Optional[Sequence[DimSpec]] = None,
+    cols: Optional[Sequence[DimSpec]] = None,
+    values: Optional[str] = None,
+    agg: Optional[str] = None,
+    n: int = 10,
+    z: float = 3.0,
+    min_support: int = 5,
+    baseline: str = "auto",
+    shifts: bool = True,
+    **opts: Any,
+) -> pd.DataFrame:
+    """Which rows of the (auto-fitted) table of ``data`` moved over time, when, and by how
+    much against their own history: spikes, drops and step changes per row, scored
+    against a seasonal, share-of-total or plain robust baseline of the row's other time
+    buckets. Equivalent to ``p2h.fit(data, ...).spikes(column, ...)``; see
+    :meth:`View.spikes` for the columns returned and how the baseline is chosen.
+    """
+    v = fit(data, rows=rows, cols=cols, values=values, agg=agg, **opts)
+    return v.spikes(column, n=n, z=z, min_support=min_support, baseline=baseline, shifts=shifts)
+
+
+def novel(
+    data: Any,
+    entity: Optional[str] = None,
+    attr: Optional[str] = None,
+    *,
+    since: Any = 0.25,
+    time: Optional[str] = None,
+    n: int = 10,
+    min_support: int = 3,
+    **opts: Any,
+) -> pd.DataFrame:
+    """What is new in the recent part of ``data``, per entity: entities never seen before
+    the split, pairs an entity never made before, values nobody had used, and entities
+    whose fan-out jumped. Equivalent to ``p2h.fit(data, ...).novel(entity, attr, ...)``;
+    see :meth:`View.novel` for ``since`` and the columns returned.
+    """
+    v = fit(data, **opts)
+    return v.novel(entity, attr, since=since, time=time, n=n, min_support=min_support)
 
 
 def _split_fit_kwargs(opts: dict) -> dict:
@@ -402,7 +449,7 @@ def dependencies(data: Any, columns: Optional[Sequence[str]] = None, *, bins: in
 __all__ = [
     "fit", "pivot", "histogram", "profile", "load", "suggest", "explore", "cluster", "chains", "regimes", "dependencies",
     "llm_context", "insights", "compare", "facet", "Comparison", "Facets", "METRICS", "METRIC_HELP", "ADDITIVE",
-    "Explanation", "prompt", "Prompt", "DEFAULT_QUESTION", "sparkline_table",
+    "Explanation", "prompt", "Prompt", "DEFAULT_QUESTION", "sparkline_table", "spikes", "SPIKE_BASELINES", "novel", "NOVELTY_KINDS",
     "survey", "load_planned", "downcast", "stats", "verbose", "log", "distribution",
     "sequences", "transitions", "transition_matrix", "steady_state",
     "View", "Layout", "Dim", "FitOptions", "Filter", "Derived", "Profile", "ColumnProfile",

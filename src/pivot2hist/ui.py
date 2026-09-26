@@ -558,9 +558,24 @@ class Explorer:
                 return
             self.comparison = obj
             if isinstance(obj, Comparison):
-                self.w_cmp_out.value = obj.html(side_by_side=bool(self.w_cmp_side.value))
+                self.w_cmp_out.value = obj.html(side_by_side=bool(self.w_cmp_side.value)) + self._drivers_html(obj)
             else:
                 self.w_cmp_out.value = obj.html()
+
+    @staticmethod
+    def _drivers_html(c: Comparison, k: int = 6) -> str:
+        """The comparison's :meth:`~pivot2hist.Comparison.drivers` as a short list under
+        the heatmap: what else differs between the sides, beyond the table's axes."""
+        try:
+            d = c.drivers(k)
+        except Exception as e:  # noqa: BLE001 - a bonus under the heatmap, never a reason to lose it
+            return f"<div style='color:#b00020;font-size:11px;margin-top:6px'>drivers: {_html.escape(type(e).__name__)}: {_html.escape(str(e))}</div>"
+        if d.empty:
+            return "<div style='color:#889;font-size:11px;margin-top:6px'>beyond the table, nothing else differs much between the sides</div>"
+        items = "".join(f"<li>{_html.escape(str(t))}</li>" for t in d["text"])
+        return ("<div style='font-size:12px;margin-top:8px'><div style='color:#667'>beyond the table, what else differs "
+                f"between {_html.escape(c.names[0])} and {_html.escape(c.names[1])}</div>"
+                f"<ul style='margin:2px 0 0 18px;padding:0'>{items}</ul></div>")
 
     # ------------------------------------------------------------------ inspect
 
@@ -873,8 +888,10 @@ class Explorer:
             W.HTML(
                 "<i>A local, non-LLM read of whatever's currently in view (every slice already applied): "
                 "column types, distributions, a mixture-model check for multiple populations in one numeric "
-                "column, skew, concentration, outliers, correlated columns, and the most surprising pivot "
-                "cells — ranked by how notable they are, not just listed. Click Calculate any time the data "
+                "column, skew, concentration, outliers, correlated columns, the most surprising pivot "
+                "cells, the strongest movements over time per row (spikes, drops, step changes against a "
+                "seasonal baseline) and what appeared recently (new entities, never-seen pairs, fan-out) — "
+                "ranked by how notable they are, not just listed. Click Calculate any time the data "
                 "changes (it does not run itself, since it's real work on every slice).</i>"
             ),
             W.HBox([self.w_sensitivity, self.w_calculate_btn]),

@@ -10,12 +10,14 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import pandas as pd
 
 from . import _binning as B
+from ._explain import distinguishing
 from ._fit import COUNT, Layout, fit_layout, freeze, order_index
 from ._html import grid_html, hist_svg, pivot_html
 from ._llm import markdown_table
@@ -297,6 +299,32 @@ def _score_values(metric: str, a: np.ndarray, b: np.ndarray, m: np.ndarray) -> O
         return np.log2((x + eps) / (y + eps))
 
 
+def _gtest_p(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """Per cell, the p-value of a 2x2 G-test (likelihood-ratio chi-square, 1 degree of
+    freedom) of "this cell's count vs the rest of the side" between sides A and B: how
+    unlikely a split this uneven is if the cell were the same share of both. Counts only.
+    NaN where either side's total is 0 or the cell is empty on both sides."""
+    A = np.where(np.isfinite(a), a, 0.0)
+    Bv = np.where(np.isfinite(b), b, 0.0)
+    ta, tb = float(A.sum()), float(Bv.sum())
+    out = np.full(a.shape, np.nan)
+    if ta <= 0 or tb <= 0:
+        return out
+    n = ta + tb
+    with np.errstate(all="ignore"):
+        obs = np.stack([A, ta - A, Bv, tb - Bv])
+        col = A + Bv
+        exp = np.stack([ta * col / n, ta * (n - col) / n, tb * col / n, tb * (n - col) / n])
+        terms = np.where(obs > 0, obs * np.log(obs / exp), 0.0)
+        g = 2.0 * terms.sum(axis=0)
+    g = np.where(np.isfinite(g), np.maximum(g, 0.0), np.nan)
+    both_empty = (A == 0) & (Bv == 0)
+    erfc = np.frompyfunc(math.erfc, 1, 1)
+    vals = erfc(np.sqrt(np.where(np.isfinite(g), g, 0.0) / 2.0)).astype(float)
+    out = np.where(np.isfinite(g) & ~both_empty, vals, np.nan)
+    return out
+
+
 def _num(v: Any, fmt: Callable[[float], str]) -> str:
     if v is None:
         return ""
@@ -403,6 +431,13 @@ class Comparison:
     def metric_help(self) -> str:
         return METRIC_HELP[self.metric]
 
+    @property
+    def is_count(self) -> bool:
+        """Whether the measure is a row count - the one case a per-cell significance test
+        (``p`` in :meth:`top`) is meaningful."""
+        layout = self.layout
+        return layout.values is None or layout.agg == "count"
+
     def _common_filters(self) -> Tuple[Filter, ...]:
         """Slices both sides carry (whatever their position: a slice added after the split
         sits behind the defining one on each side)."""
@@ -481,14 +516,23 @@ class Comparison:
     def top(self, n: int = 10, metric: Optional[str] = None) -> pd.DataFrame:
         """The ``n`` cells that differ most between the sides, biggest first: ``row``,
         ``col``, both raw values (columns named after the sides), ``delta``, ``ratio``,
-        ``lift`` (additive measures only), the ranking metric when it is another one, and
-        ``only_in`` (the side's name when the other side has nothing there).
+        ``lift`` (additive measures only), the ranking metric when it is another one,
+        ``p`` (count measures only, see below) and ``only_in`` (the side's name when the
+        other side has nothing there).
 
         Ratio-like metrics (``ratio``, ``lift``, ``pct_change``) rank by a *shrunk* log
         ratio - the same score the heatmap is coloured by - so a x4 and a x0.25 are
         equally big moves, a x142 built on a handful of rows ranks below a x6 built on
         millions, and a cell present on one side only ranks by how much is actually
         there. The values listed are the exact ones.
+
+        ``p`` is the significance of each mover when the measure is a row count: a 2x2
+        G-test (likelihood-ratio chi-square, one degree of freedom) of the cell's count
+        against the rest of its side, A vs B - how unlikely a split this uneven is if the
+        cell made up the same share of both sides. It is raw, per cell: with ``k`` cells
+        in play, a ``p`` below ``0.05 / k`` survives a Bonferroni correction. It is
+        blind to what the rows are (sampling, duplicates, one host looping), so read it
+        as "enough rows to trust the ratio", not as proof.
         """
         m = self.metric if metric is None else self._check_metric(metric)
         a, b = self._arrays()
@@ -505,6 +549,7 @@ class Comparison:
         with np.errstate(all="ignore"):
             delta, ratio = a - b, _ratio(a, b)
             lift = _ratio(_share(a), _share(b)) if self.additive else None
+        pv = _gtest_p(a, b) if self.is_count else None
         rows: List[Dict[str, Any]] = []
         for flat in np.argsort(-score, axis=None)[: max(0, int(n))]:
             if score.flat[flat] < 0:
@@ -516,11 +561,54 @@ class Comparison:
                 rec["lift"] = float(lift[i, j])
             if m not in ("delta", "ratio", "lift", "a", "b"):
                 rec[m] = float(mv[i, j])
+            if pv is not None:
+                rec["p"] = float(pv[i, j])
             rec["only_in"] = na if (empty_b[i, j] and not empty_a[i, j]) else (nb if (empty_a[i, j] and not empty_b[i, j]) else None)
             rows.append(rec)
         cols = ["row", "col", na, nb, "delta", "ratio"] + (["lift"] if lift is not None else []) + \
-               ([m] if m not in ("delta", "ratio", "lift", "a", "b") else []) + ["only_in"]
+               ([m] if m not in ("delta", "ratio", "lift", "a", "b") else []) + (["p"] if pv is not None else []) + ["only_in"]
         return pd.DataFrame(rows, columns=cols)
+
+    def _split_columns(self) -> List[str]:
+        """Columns that define the sides (the slices one side has and the other hasn't);
+        for a query split, every column the query names."""
+        out: List[str] = []
+        names = [cp.name for cp in self.a.profile]
+        for side in (self.a, self.b):
+            for f in self._own_filters(side):
+                if f.column:
+                    cols = [f.column]
+                else:
+                    text = str(f.value if isinstance(f.value, str) else f.label)
+                    cols = [c for c in names if re.search(r"(?<![\w.])" + re.escape(c) + r"(?![\w.])", text)]
+                out.extend(c for c in cols if c not in out)
+        return out
+
+    def drivers(self, k: int = 8) -> pd.DataFrame:
+        """What *else* differs between the sides - the columns the table doesn't show.
+        For every column that is neither on an axis nor defines the split: for a label
+        column, the value whose share differs most between A and B (as a lift, A over
+        B); for a numeric column, the medians (as a ratio). The ``k`` strongest, best
+        first: ``column``, ``kind``, ``value``, ``share_a`` / ``share_b`` / ``lift`` or
+        ``median_a`` / ``median_b`` / ``ratio``, a ``score`` (a label's larger share x
+        ``|log2 lift|``; a numeric's ``|log2 ratio|``) and a ``text`` sentence.
+
+        The same measure :meth:`View.explain` uses for "what sets these rows apart",
+        run on the two sides as peers: it answers "the denies are up - are they also
+        coming from somewhere else, on another protocol, at another size?". Rows are
+        sampled to 50k per side. Differences under x1.25 either way are dropped.
+        """
+        key = ("drivers", int(k))
+        if key not in self._cache:
+            exclude = [d.column for d in self.layout.rows + self.layout.cols] + self._split_columns()
+            with log.step("compare", f"drivers of {self.describe()}"):
+                feats = distinguishing(self.a.data, self.b.data, self.a.profile, exclude=exclude, k=k,
+                                       labels=self.names, symmetric=True)
+            rename = {"share_in_cell": "share_a", "share_in_rest": "share_b", "median_in_cell": "median_a", "median_in_rest": "median_b"}
+            recs = [{rename.get(kk, kk): vv for kk, vv in f.items()} for f in feats]
+            cols = ["column", "kind", "value", "share_a", "share_b", "lift", "median_a", "median_b", "ratio", "score", "text"]
+            self._cache[key] = pd.DataFrame(recs, columns=cols)
+        return self._cache[key]
 
     # ------------------------------------------------------------------ slicing (both sides)
 
@@ -727,7 +815,12 @@ class Comparison:
             "shape": [int(x) for x in m.shape],
             "table": _records(m),
             "top": _json_safe(self.top(n).to_dict(orient="records")),
+            "drivers": _json_safe(self._drivers_records(5)),
         }
+
+    def _drivers_records(self, k: int) -> List[Dict[str, Any]]:
+        d = self.drivers(k)
+        return [{kk: vv for kk, vv in r.items() if not (isinstance(vv, float) and math.isnan(vv))} for r in d.to_dict(orient="records")]
 
     def to_json(self, **kw: Any) -> str:
         kw.setdefault("indent", 2)
@@ -742,6 +835,7 @@ class Comparison:
         base = self._base if self._split else self.a
         kw.setdefault("table", False)
         kw.setdefault("anomalies", False)
+        kw.setdefault("spikes", False)
         return build_prompt(base, question, compare=self, **kw)
 
     def llm_context(self, *, max_rows: int = 30, max_cols: int = 12, top: int = 5) -> Dict[str, Any]:
@@ -756,10 +850,16 @@ class Comparison:
             fmt = _formatter(self.metric)
             key = self.metric if self.metric in ("delta", "ratio", "lift") else (self.metric if self.metric in movers[0] else "delta")
             words = "; ".join(
-                f"{r['row']} / {r['col']}: {fmt_cell(r[na])} vs {fmt_cell(r[nb])} ({fmt(r[key]) or 'n/a'})"
+                f"{r['row']} / {r['col']}: {fmt_cell(r[na])} vs {fmt_cell(r[nb])} ({fmt(r[key]) or 'n/a'}"
+                + (f", p={r['p']:.2g}" if isinstance(r.get("p"), float) and math.isfinite(r["p"]) else "") + ")"
                 for r in movers
             )
             parts.append(f"Biggest movers: {words}.")
+            if self.is_count:
+                parts.append("p is a per-cell G-test of the cell's share of its side, A vs B (raw, not corrected for the number of cells).")
+        drivers = self._drivers_records(5)
+        if drivers:
+            parts.append("Beyond the table, what else differs between the sides: " + "; ".join(d["text"] for d in drivers) + ".")
         if truncated:
             parts.append("The table below is truncated.")
         return {
@@ -770,7 +870,7 @@ class Comparison:
                 "a": {"name": na, "rows": int(len(self.a.data)), "slices": list(self.a.slices)},
                 "b": {"name": nb, "rows": int(len(self.b.data)), "slices": list(self.b.slices)},
                 "shape": {"rows": int(self.shape[0]), "cols": int(self.shape[1])}, "truncated": truncated,
-                "top": movers,
+                "top": movers, "drivers": _json_safe(drivers),
             },
             "table": md,
         }

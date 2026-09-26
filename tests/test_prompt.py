@@ -79,7 +79,7 @@ def test_comparison_prompt(v):
 
 
 def test_top_level_prompt_routes_fit_and_prompt_kwargs(fw):
-    p = p2h.prompt(fw, "q?", rows=["dst_port"], cols=["action"], max_rows=6, table_max_rows=4, anomalies=False, insights=False)
+    p = p2h.prompt(fw, "q?", rows=["dst_port"], cols=["action"], max_rows=6, table_max_rows=4, anomalies=False, insights=False, spikes=False)
     assert _sections(p) == ["## Dataset", "## Current view", "## Your task"] and p.rstrip().endswith("q?")
     assert "by dst_port (top 5) x action" in p and "truncated to 4" in p
     assert "## Comparison" in p2h.prompt(fw, compare={"action": "deny"}, anomalies=False)

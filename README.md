@@ -38,6 +38,9 @@ v.facet("action")                  # small multiples: one panel per value, same 
 v.style(sparklines="timestamp")    # a trend column: one small line per row, that row's measure over time
 v.rows("22", "deny")               # the raw rows behind a cell, by the labels the table shows
 v.explain("22", "deny")            # why that cell: vs independence, shares, rank, and what sets its rows apart
+v.spikes("timestamp")              # what changed and when: per-row spikes, drops and step changes vs a seasonal baseline
+v.novel("src_ip", "dst_port")      # what appeared: new sources, never-seen pairs and values, fan-out jumps
+v.compare(action="deny").drivers() # beyond the table: what else differs between the sides (and .top() carries a p-value)
 v.prompt("What's unusual here?")   # everything on screen as one paste-anywhere LLM prompt (no model is called)
 p2h.agent.pivot("firewall.csv", rows=["src_ip"], filters=[{"column": "action", "eq": "deny"}])  # plain JSON, for LLM agents
 ```
@@ -581,8 +584,11 @@ that's really two or more distinct populations, not one: the "mixle"-inspired pi
 the middle 80% of the data so a couple of extreme outliers on an otherwise skewed column
 can't make it misread as constant), **high_cardinality** (variety close to an id, on a
 column the profiler didn't already call one), **correlation** (the most mutually-
-informative column pairs — see `p2h.dependencies()`), and **anomaly** (the most surprising
-cells of the current pivot, when there is one — see `v.anomalies()`).
+informative column pairs — see `p2h.dependencies()`), **anomaly** (the most surprising
+cells of the current pivot, when there is one — see `v.anomalies()`), **spike** (the
+strongest movements over time per row of the table, against a seasonal baseline — see
+`v.spikes()` below) and **novelty** (what appeared in the last quarter of the time span:
+new entities, never-seen pairs, fan-out jumps — see `v.novel()` below).
 
 `sensitivity` (0..1, default 0.5) is the only knob: each finding carries a 0..1
 significance, and `sensitivity` sets where the cutoff falls — 0 surfaces only the
@@ -602,6 +608,71 @@ mixture fitting) sample down to 20k rows — which is exactly the point: **Calcu
 once in the explorer's **Insights** tab, then whenever you slice further, hit
 **Calculate** again to recompute on the narrower data ("recalculate" is just calling this
 again).
+
+## What changed, what appeared: spikes() and novel()
+
+A pivot answers "how much"; a sparkline shows the shape of "when"; `v.spikes()` scores it.
+Every row of the current table gets a time series of the view's measure (the same buckets
+the sparklines draw, up to 48 on the minute-to-year ladder) and every bucket is compared
+with a robust baseline of that row's *own* other buckets — its median, with the spread
+measured by the median absolute deviation, so the spike doesn't inflate the yardstick it's
+judged by:
+
+```python
+v = p2h.fit("firewall.csv", rows=["dst_port"], cols=["action"])
+v.spikes("timestamp")            # column defaults to the first datetime column not on the row axis
+#     row            bucket   kind  observed  expected  ratio  score  support  baseline
+# 0  3389  2026-03-04 12:00  spike     262.0      14.0   18.7   55.8      262  seasonal
+# 1   445  2026-03-03 06:00  shift down  60.0     127.5    0.5   -5.0       60  seasonal
+v.spikes(baseline="median", z=4, shifts=False)   # plain per-row median, stricter, single buckets only
+p2h.spikes(df, rows=["src_ip"], values="bytes", agg="sum")
+```
+
+Two kinds of movement come back, one per line, strongest first: a **spike** or **drop**
+(one bucket far from its baseline) and a **shift up** / **shift down** (a step change
+that persists from that bucket on, found as the split whose standardized residuals differ
+most before and after). `score` is a signed robust z — how many baseline spreads away —
+and `support` the rows behind it; a bucket needs `min_support` rows (5) and `|score| >= z`
+(3), and anything within ×1.25 of its expectation is dropped however loud it is in
+Poisson terms.
+
+The baseline is **seasonal** whenever three periods exist to learn from: a 6-hour bucket
+is compared with the same hours on the other days, a daily bucket with the same weekday
+in other weeks, a monthly one with the same month in other years — so the daytime peak is
+not reported as a spike every single day. Without three periods, an additive measure is
+judged by the row's **share** of each bucket's total (a peak everyone has isn't this
+row's spike), and anything else by the row's plain **median**; `baseline=` forces one.
+Spreads are floored (Poisson-like for counts) so a flat row can't turn noise into spikes,
+and sums and means of heavy-tailed quantities (bytes, latencies) are scored on a log
+scale, so one big transfer reads as ×20, not +25 spreads. Deterministic, local, and no
+tuning per dataset.
+
+`v.novel()` answers the other half — not what grew, but what **appeared**. The rows in
+view are split at `since` (a fraction of the span: `0.25` = the last quarter; a duration
+back from the end: `"24h"`, `"7D"`; or a moment: `"2026-03-06"`) and every entity seen
+since — a source IP, a user, a host — is checked against the history before it:
+
+```python
+v.novel("src_ip", "dst_port", since="24h")
+#          kind    entity  value  before  after  peers  score  text
+# 0   new value  10.0.0.1  31337       0      8      0   11.3  dst_port 31337 is a new value: never seen before ...
+# 1  new entity  10.9.9.9   None       0     60   None   10.7  src_ip 10.9.9.9 is new: first seen since ..., 60 row(s) over 27 distinct dst_port
+v.novel()                        # entity/attr guessed: the address-like column with the most values, then the next
+```
+
+A **new entity** was never seen before the split; a **new pair** is an entity that
+existed but had never carried this value (a source talking to a port it never used;
+`peers` says how many other entities had used that value before — the fewer, the rarer);
+a **new value** is a pair whose value nobody had used at all; a **fan-out** is an entity
+whose distinct values since at least doubled against its history (a scanner's port count
+going from 3 to 40). Scores are bits-like — log2 of the rows behind the finding, plus
+log2 of how rare the value was among entities — so a finding on many rows about a rare
+value ranks first and the four kinds rank against each other. Everything is counted,
+nothing is modelled.
+
+Both feed `v.insights()` (as **spike** and **novelty** findings) and `v.prompt()` (the
+strongest movements go into *Computed findings*), and both have agent/MCP versions
+(`spikes`, `novel`) that return the same rows with a ready-made sentence each.
 
 ## Comparing: A vs B on one layout
 
@@ -670,6 +741,26 @@ drops the shared slices but keeps the ones that define the sides; `c.exclude(...
 `c.html(side_by_side=True)` (both raw tables on one colour scale next to the diff),
 `c.histogram("bytes")` (bins planned on both sides' data together, so they line up), and
 `c.to_dict()` / `c.llm_context()` for code or a model.
+
+**Significance and drivers.** When the measure is a row count, `c.top()` carries a `p`
+per mover: a 2×2 G-test (likelihood-ratio chi-square, one degree of freedom) of the
+cell's count against the rest of its side, A vs B — how unlikely a split this uneven is if
+the cell made up the same share of both sides. It is raw, per cell: with *k* cells in
+play, a `p` below 0.05 / *k* survives a Bonferroni correction. Read it as "enough rows
+to trust the ratio", not as proof — it's blind to what the rows are. `c.drivers()` then
+answers what the table *doesn't* show: for every column that is neither on an axis nor
+defines the split, the label whose share differs most between the sides (as a lift) or
+the numeric whose median differs most (as a ratio) — the same measure `explain()` uses
+for "what sets these rows apart", run on the two sides as peers:
+
+```python
+c = p2h.compare(df, action="deny", rows=["dst_port"], cols=["protocol"], agg="count")
+c.top(3)          # ... lift, p, only_in
+c.drivers()       # `bytes` median 62 in action=deny vs 924 in rest (×0.068); `severity` is '1' for 0% of action=deny vs 43% of rest ...
+```
+
+Both ride along in `c.to_dict()`, `c.llm_context()`, `c.prompt()` and the agent/MCP
+`compare` tool, and the explorer's **Compare** tab lists the drivers under the heatmap.
 
 **Facets — small multiples.** One panel per value of a column, same layout, one colour
 scale, so the panels read against each other:
@@ -909,6 +1000,8 @@ agent.slicers("events.parquet", columns=["action"])        # values to filter on
 agent.anomalies("events.parquet", rows=["dst_port"], cols=["action"])
 agent.compare("events.parquet", split={"column": "action", "eq": "deny"})   # deny vs the rest: lift per cell, top movers
 agent.explain("events.parquet", cell={"dst_port": "22", "action": "deny"}, rows=["dst_port"], cols=["action"])  # why this cell
+agent.spikes("events.parquet", rows=["dst_port"], cols=["action"])     # what changed and when: per-row spikes, drops, step changes
+agent.novel("events.parquet", "src_ip", "dst_port", since="24h")      # what appeared: new sources, never-seen pairs, fan-out
 agent.rows("events.parquet", cell={"dst_port": "22", "action": "deny"}, rows=["dst_port"], cols=["action"], n=20)
 agent.prompt("events.parquet", question="What's unusual?", split={"column": "action", "eq": "deny"})   # one prompt, as text
 ```
@@ -987,7 +1080,11 @@ objects naming the sides; `vs` omitted = the rest), `rows(source, cell=, n=, ...
 question=, table=, profile=, anomalies=, insights=, split=, vs=, metric=, cell=, ...)`
 (one self-contained analysis prompt as text; also an MCP prompt named `analyze`),
 `suggest(source, n=, filters=)`,
-`slicers(source, columns=, top=)`, `anomalies(source, n=, rows=, cols=, filters=)`.
+`slicers(source, columns=, top=)`, `anomalies(source, n=, rows=, cols=, filters=)`,
+`spikes(source, column=, n=, z=, min_support=, baseline=, rows=, cols=, values=, agg=, filters=)`
+(per-row movements over time against a seasonal baseline, each with a sentence),
+`novel(source, entity=, attr=, since=, time=, n=, min_support=, filters=)` (what appeared
+since a point in time: new entities, never-seen pairs and values, fan-out jumps).
 Works against both `mcp<2` (`FastMCP`) and `mcp>=2` (`MCPServer`) — whichever is
 installed.
 

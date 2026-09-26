@@ -1119,6 +1119,82 @@ class View:
         table, _labels = sparkline_table(self, column, max_points=max_points)
         return table
 
+    def spikes(
+        self,
+        column: Optional[str] = None,
+        *,
+        n: int = 10,
+        z: float = 3.0,
+        min_support: int = 5,
+        max_points: int = 48,
+        baseline: str = "auto",
+        shifts: bool = True,
+    ) -> pd.DataFrame:
+        """Which rows of this table moved over time, when, and by how much against their
+        own history - the sparklines, scored. Each row's measure is bucketed over the
+        datetime ``column`` (default: the first datetime column not on the row axis, up
+        to ``max_points`` buckets on the usual minute-to-year ladder) and every bucket is
+        compared with a robust baseline of that row's other buckets. Returns the ``n``
+        strongest movements, one per line: ``row``, ``bucket``, ``kind`` (``spike`` /
+        ``drop`` for one bucket far from its baseline; ``shift up`` / ``shift down`` for
+        a step change that persists from that bucket on), ``observed``, ``expected``,
+        ``ratio``, ``score`` (signed robust z: how many baseline spreads away), ``support``
+        (rows behind it) and the ``baseline`` used.
+
+        The baseline is *seasonal* when there are at least three periods to learn from
+        (a 6-hour bucket vs the same hours on other days, a day vs the same weekday in
+        other weeks, a month vs the same month in other years), so the daily peak is
+        not a "spike" every day; otherwise an additive measure is judged by the row's
+        *share* of each bucket's total (a peak everyone has isn't this row's), and
+        anything else by the row's plain ``median``. ``baseline=`` forces one of those.
+        Spreads are the median absolute deviation, floored (Poisson-like for counts) so
+        a flat row can't turn noise into spikes; a bucket needs ``min_support`` rows
+        behind it and ``|score| >= z``; sums and means of heavy-tailed quantities
+        (bytes, latencies) are scored on a log scale. ``shifts=False`` reports single
+        buckets only. Deterministic and local - no model call; see
+        :func:`pivot2hist.spikes` for the plain function.
+        """
+        from ._spikes import spikes as _spikes
+
+        return _spikes(self, column, n=n, z=z, min_support=min_support, max_points=max_points, baseline=baseline, shifts=shifts)
+
+    def novel(
+        self,
+        entity: Optional[str] = None,
+        attr: Optional[str] = None,
+        *,
+        since: Any = 0.25,
+        time: Optional[str] = None,
+        n: int = 10,
+        min_support: int = 3,
+    ) -> pd.DataFrame:
+        """What is *new* in the recent part of the data in view, per entity. The rows are
+        split at ``since`` - a fraction of the time span (``0.25``: the last quarter), a
+        duration back from the end (``"24h"``, ``"7D"``) or a moment (``"2026-03-06"``) -
+        on the datetime column ``time`` (default: the first one), and every value of the
+        ``entity`` column (a source IP, user, host ...) seen since is checked against the
+        history before it. Returns the ``n`` strongest findings, best first: ``kind``,
+        ``entity``, ``value``, ``before``, ``after``, ``peers``, ``score``, ``text``:
+
+        * ``new entity`` - never seen before the split (``after`` = its rows since);
+        * ``new pair`` - the entity existed, but had never carried this ``attr`` value
+          (a source talking to a port it never used); ``peers`` = how many other
+          entities had that value before, so the fewer the rarer;
+        * ``new value`` - a pair whose value nobody had used before at all;
+        * ``fan-out`` - the entity's distinct ``attr`` values since (``after``) vs before
+          (``before``), when at least doubled.
+
+        ``entity``/``attr`` default to the address-like label column with the most
+        distinct values and the next most varied label column. Scores are bits-like
+        (log2 of the rows behind the finding, plus log2 of how rare the value was among
+        entities), comparable across kinds; a finding needs ``min_support`` rows. Counted,
+        not modelled, and local. Pairs with :meth:`spikes`: spikes say what grew, this
+        says what appeared. See :func:`pivot2hist.novel` for the plain function.
+        """
+        from ._novelty import novelty as _novelty
+
+        return _novelty(self, entity, attr, since=since, time=time, n=n, min_support=min_support)
+
     def distribution(self, column: str, **kw: Any) -> Optional[DistFit]:
         """Best-fitting probability distribution for a numeric column of the sliced data
         (BIC over normal/lognormal/exponential/gamma/uniform/poisson/geometric/bernoulli/
@@ -1348,7 +1424,8 @@ class View:
         every column with kind, semantic type, cardinality, nulls, examples; ``profile=``),
         the **current view** (its description, active slices and the table as markdown,
         ``table=``, ``max_rows=``/``max_cols=``), **computed findings** (the most surprising
-        cells, ``anomalies=``/``n_anomalies=``; the ranked :meth:`insights`, ``insights=True``
+        cells, ``anomalies=``/``n_anomalies=``; the strongest movements over time per row,
+        :meth:`spikes`, ``spikes=``/``n_spikes=``; the ranked :meth:`insights`, ``insights=True``
         or a report you already have, at ``sensitivity=``), a **comparison** (``compare=``:
         a :class:`Comparison`, or a split such as ``{"action": "deny"}`` or a query string),
         a **cell in focus** (``explain=``: an :class:`Explanation`, ``{column: label}``, or a

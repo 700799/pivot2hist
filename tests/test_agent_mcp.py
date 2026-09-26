@@ -128,7 +128,7 @@ def test_mcp_tools_registered(mcp_server_module):
 
     tools = asyncio.run(mcp_server_module.server.list_tools())
     names = {t.name for t in tools}
-    assert names == {"describe", "pivot", "llm_context", "insights", "compare", "rows", "explain", "prompt", "suggest", "slicers", "anomalies"}
+    assert names == {"describe", "pivot", "llm_context", "insights", "compare", "rows", "explain", "prompt", "suggest", "slicers", "anomalies", "spikes", "novel"}
     for t in tools:
         assert t.description and len(t.description) > 10
 
@@ -267,7 +267,7 @@ def test_mcp_anomalies_and_distributions_tools(mcp_server_module, tmp_path, fw):
 def test_agent_compare_split_vs_rest(fw):
     r = agent.compare(fw, split={"column": "action", "eq": "deny"}, n=3)
     _assert_json_safe(r)
-    assert set(r) == {"description", "mode", "layout", "metric", "metric_meaning", "a", "b", "shape", "table", "top"}
+    assert set(r) == {"description", "mode", "layout", "metric", "metric_meaning", "a", "b", "shape", "table", "top", "drivers"}
     assert r["metric"] == "lift" and r["a"]["name"] == "action=deny" and r["b"]["name"] == "rest"
     assert r["a"]["rows"] == (fw["action"] == "deny").sum() and r["a"]["rows"] + r["b"]["rows"] == len(fw)
     assert len(r["top"]) == 3 and {"row", "col", "delta", "ratio", "lift", "only_in"} <= set(r["top"][0])
