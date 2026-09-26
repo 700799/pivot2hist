@@ -21,6 +21,7 @@ the same way as in a notebook: a call never has to load more than the memory bud
 """
 from __future__ import annotations
 
+import math
 import os
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
@@ -380,9 +381,13 @@ def compare(
     ``"share_a"``/``"share_b"``.
 
     Returns ``description``, ``metric`` and ``metric_meaning``, ``a``/``b`` (name, rows,
-    slices, total), ``layout``, ``shape``, ``table`` (the metric per cell, as records) and
+    slices, total), ``layout``, ``shape``, ``table`` (the metric per cell, as records),
     ``top`` - the ``n`` cells that differ most, each with both raw values, ``delta``,
-    ``ratio``, ``lift`` and ``only_in`` (set when the other side has nothing there).
+    ``ratio``, ``lift``, ``only_in`` (set when the other side has nothing there) and, for
+    a count measure, ``p`` (a per-cell G-test of the cell's share of its side, A vs B;
+    raw, so compare it with ``0.05 / cells``) - and ``drivers``: what else differs between
+    the sides beyond the table's axes (see :meth:`Comparison.drivers`), each with a
+    ready-made ``text``.
     """
     from . import fit as _fit
 
@@ -634,6 +639,94 @@ def anomalies(
     return {"layout": v.layout.describe(), "cells": df.to_dict(orient="records")}
 
 
+def spikes(
+    source: Source,
+    column: Optional[str] = None,
+    n: int = 10,
+    *,
+    z: float = 3.0,
+    min_support: int = 5,
+    baseline: str = "auto",
+    shifts: bool = True,
+    rows: Optional[Sequence[str]] = None,
+    cols: Optional[Sequence[str]] = None,
+    values: Optional[str] = None,
+    agg: Optional[str] = None,
+    filters: Optional[Sequence[Filter]] = None,
+    max_rows: int = 40,
+    max_cols: int = 12,
+    memory_budget_mb: Optional[float] = None,
+    **opts: Any,
+) -> Dict[str, Any]:
+    """Which rows of the pivot moved over time, when, and by how much against their own
+    history: the ``n`` strongest spikes, drops and step changes per row of the table,
+    over the datetime ``column`` (default: the first one), each with the row, the time
+    bucket, the ``kind``, ``observed`` vs ``expected``, the ``ratio``, a signed robust
+    ``score`` (baseline spreads away), the rows behind it and a ready-made sentence. The
+    baseline is seasonal when three periods exist (same hours on other days, same weekday
+    in other weeks ...), else the row's share of the bucket total, else its median; see
+    :meth:`View.spikes`. Same layout arguments as :func:`pivot`."""
+    from . import fit as _fit
+    from ._spikes import describe_spike
+
+    v = _fit(
+        source, rows=list(rows) if rows is not None else None, cols=list(cols) if cols is not None else None,
+        values=values, agg=agg, max_rows=max_rows, max_cols=max_cols, memory_budget_mb=memory_budget_mb, **opts,
+    )
+    v = _apply_filters(v, filters)
+    df = v.spikes(column, n=n, z=z, min_support=min_support, baseline=baseline, shifts=shifts)
+    from ._spikes import default_time_column
+
+    col = column or default_time_column(v)
+    recs = []
+    for r in df.itertuples():
+        d = {k: (None if isinstance(x, float) and not math.isfinite(x) else x) for k, x in r._asdict().items() if k != "Index"}
+        d["text"] = describe_spike(r, v.layout.measure, str(col))
+        recs.append(d)
+    return {"layout": v.layout.describe(), "column": col, "measure": v.layout.measure, "n": len(recs), "spikes": recs}
+
+
+def novel(
+    source: Source,
+    entity: Optional[str] = None,
+    attr: Optional[str] = None,
+    *,
+    since: Any = 0.25,
+    time: Optional[str] = None,
+    n: int = 10,
+    min_support: int = 3,
+    filters: Optional[Sequence[Filter]] = None,
+    max_rows: int = 40,
+    max_cols: int = 12,
+    memory_budget_mb: Optional[float] = None,
+    **opts: Any,
+) -> Dict[str, Any]:
+    """What is new in the recent part of the data, per entity: the rows are split at
+    ``since`` (a fraction of the time span such as ``0.25``, a duration back from the end
+    such as ``"24h"``, or a moment such as ``"2026-03-06"``) on the datetime ``time``
+    column (default: the first), and every ``entity`` value seen since (default: the
+    address-like column with the most distinct values) is checked against the history:
+    ``new entity`` (never seen before), ``new pair`` (an entity carrying an ``attr`` value
+    it never had; ``peers`` = how many other entities had that value before), ``new
+    value`` (a value nobody had used) and ``fan-out`` (distinct ``attr`` values since vs
+    before, when at least doubled). Returns the ``n`` strongest with a bits-like ``score``
+    and a ready-made ``text`` each; see :meth:`View.novel`."""
+    from . import fit as _fit
+
+    v = _fit(source, max_rows=max_rows, max_cols=max_cols, memory_budget_mb=memory_budget_mb, **opts)
+    v = _apply_filters(v, filters)
+    df = v.novel(entity, attr, since=since, time=time, n=n, min_support=min_support)
+    recs = []
+    for r in df.itertuples():
+        d = {k: x for k, x in r._asdict().items() if k != "Index"}
+        d["peers"] = None if d["peers"] is None or (isinstance(d["peers"], float) and math.isnan(d["peers"])) else int(d["peers"])
+        d["before"], d["after"] = int(d["before"]), int(d["after"])
+        recs.append(d)
+    since_at = df.attrs.get("since")
+    return {"entity": entity, "attr": attr, "since": (str(since_at) if since_at is not None else None),
+            "n": len(recs), "findings": recs}
+
+
 def slicers(
     source: Source,
     *,
@@ -653,4 +746,4 @@ def slicers(
     return {col: [{"value": val, "count": int(c)} for val, c in vals] for col, vals in raw.items()}
 
 
-__all__ = ["describe", "pivot", "llm_context", "insights", "compare", "rows", "explain", "prompt", "suggest", "slicers", "anomalies", "FILTER_OPS"]
+__all__ = ["describe", "pivot", "llm_context", "insights", "compare", "rows", "explain", "prompt", "suggest", "slicers", "anomalies", "spikes", "novel", "FILTER_OPS"]

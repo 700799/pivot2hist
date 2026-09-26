@@ -47,7 +47,11 @@ server = _Server(
         "returns the cells that moved most. When one cell of a table looks interesting, "
         "explain() says what's in it (vs what independence would predict, its shares, and "
         "what sets its rows apart) and rows() returns the raw rows behind it - name the "
-        "cell by the labels pivot() showed. prompt() packages any of that as one "
+        "cell by the labels pivot() showed. spikes() scores every row's trend over time "
+        "against its own seasonal history and lists the spikes, drops and step changes - "
+        "call it for 'what changed, and when'; novel() lists what appeared in the recent "
+        "part of the data per entity (new sources, never-seen pairs and values, fan-out "
+        "jumps). prompt() packages any of that as one "
         "self-contained markdown prompt, for briefing another model or a sub-agent. Files "
         "are surveyed against available memory "
         "and streamed page by page when too large to hold in memory, so any source can be "
@@ -186,8 +190,13 @@ def compare(
     for both sides so every cell means the same thing on each. metric: "lift" (default for
     count/sum: A's share of its total over B's share - size-independent, >1 = over-
     represented in A), "delta" (A - B, default otherwise), "ratio", "pct_change",
-    "share_delta". Returns both sides' totals, the metric table, and `top`: the n cells
-    that differ most with both raw values, delta, ratio, lift and only_in."""
+    "share_delta". Returns both sides' totals, the metric table, `top`: the n cells that
+    differ most with both raw values, delta, ratio, lift, only_in and - for a count
+    measure - `p`, a per-cell G-test of the cell's share of its side A vs B (raw; below
+    0.05 / number of cells is safe), and `drivers`: what else differs between the sides
+    beyond the table's own axes (a label whose share differs most, as a lift; a numeric
+    whose median differs, as a ratio), each with a sentence - the answer to "the denies
+    are up; are they also from somewhere else, on another protocol, at another size?"."""
     return _agent.compare(
         source, split=split, vs=vs, metric=metric, n=n, rows=rows, cols=cols, values=values, agg=agg,
         filters=filters, max_rows=max_rows, max_cols=max_cols, memory_budget_mb=memory_budget_mb,
@@ -340,6 +349,70 @@ def anomalies(
     heavy port/action combination that fires far more than its row and column totals
     alone would suggest, for instance). Needs at least 2 rows and 2 columns."""
     return _agent.anomalies(source, n, rows=rows, cols=cols, filters=filters)
+
+
+@server.tool()
+def spikes(
+    source: str,
+    column: Optional[str] = None,
+    n: int = 10,
+    z: float = 3.0,
+    min_support: int = 5,
+    baseline: str = "auto",
+    rows: Optional[List[str]] = None,
+    cols: Optional[List[str]] = None,
+    values: Optional[str] = None,
+    agg: Optional[str] = None,
+    filters: Optional[List[Dict[str, Any]]] = None,
+    max_rows: int = 40,
+    max_cols: int = 12,
+) -> Dict[str, Any]:
+    """Which rows of the pivot moved over time, when, and by how much against their own
+    history: the n strongest spikes, drops and step changes (`kind`), one per line, over
+    the datetime `column` (default: the first one). Each has the row, the time bucket,
+    observed vs expected, the ratio, a signed robust `score` (how many baseline spreads
+    away; >= z to be listed), the rows behind it and a sentence you can quote. The
+    baseline is seasonal when the data spans three periods (a 6-hour bucket vs the same
+    hours on other days, a day vs the same weekday in other weeks), so a daily peak is
+    not a spike; otherwise the row's share of each bucket's total, else its median
+    (`baseline` forces 'seasonal', 'share' or 'median'). Use it for 'what changed and
+    when'; anomalies() is for 'which cell is surprising given its row and column'."""
+    return _agent.spikes(
+        source, column, n, z=z, min_support=min_support, baseline=baseline, rows=rows, cols=cols, values=values,
+        agg=agg, filters=filters, max_rows=max_rows, max_cols=max_cols,
+    )
+
+
+@server.tool()
+def novel(
+    source: str,
+    entity: Optional[str] = None,
+    attr: Optional[str] = None,
+    since: Optional[str] = None,
+    time: Optional[str] = None,
+    n: int = 10,
+    min_support: int = 3,
+    filters: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """What is new in the recent part of the data, per entity. The rows are split at
+    `since` - a fraction of the time span like "0.25" (the default: the last quarter),
+    a duration back from the end like "24h" or "7D", or a moment like "2026-03-06" - on
+    the datetime `time` column (default: the first one), and every `entity` value seen
+    since (default: the address-like column with the most distinct values, e.g. src_ip)
+    is checked against the history before the split: `new entity` (never seen before),
+    `new pair` (an entity carrying an `attr` value it never had - a source talking to a
+    port it never used; `peers` = how many other entities had that value before, so the
+    fewer the rarer), `new value` (a value nobody had used before at all) and `fan-out`
+    (the entity's distinct `attr` values since vs before, when at least doubled - a
+    scanner). Each finding has a bits-like `score` and a `text` you can quote. Use it for
+    'what appeared'; spikes() is for 'what grew'."""
+    parsed: Any = 0.25 if since is None else since
+    if isinstance(parsed, str):
+        try:
+            parsed = float(parsed) if 0 < float(parsed) < 1 else parsed
+        except ValueError:
+            pass
+    return _agent.novel(source, entity, attr, since=parsed, time=time, n=n, min_support=min_support, filters=filters)
 
 
 def main() -> None:

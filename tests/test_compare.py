@@ -1,11 +1,12 @@
 import json
+import math
 
 import numpy as np
 import pandas as pd
 import pytest
 
 import pivot2hist as p2h
-from pivot2hist import Comparison, Facets
+from pivot2hist import Comparison, Facets, agent
 
 
 @pytest.fixture(scope="module")
@@ -158,7 +159,7 @@ def test_top_is_ranked_by_a_shrunk_log_ratio_and_lists_exact_values():
     df = pd.DataFrame({"g": ["a"] * 60_030 + ["b"] * 10_001, "x": ["p"] * 30 + ["q"] * 60_000 + ["p"] * 1 + ["q"] * 10_000})
     c = p2h.fit(df, rows=["x"], cols=[], agg="count").compare(g="a").with_metric("ratio")
     top = c.top()
-    assert list(top.columns) == ["row", "col", "g=a", "rest", "delta", "ratio", "lift", "only_in"]
+    assert list(top.columns) == ["row", "col", "g=a", "rest", "delta", "ratio", "lift", "p", "only_in"]
     assert top["row"].tolist() == ["q", "p"] and top["ratio"].tolist() == [6.0, 30.0]
     assert "×30" in c.render() and "×6" in c.render()  # displayed values stay exact
     df2 = pd.DataFrame({"g": ["a"] * 8 + ["b"] * 10_000, "x": ["p"] * 2 + ["q"] * 6 + ["p"] * 1 + ["q"] * 9_999})
@@ -260,7 +261,7 @@ def test_to_dict_and_llm_context_are_json_safe(v):
     d = c.to_dict(4)
     s = json.dumps(d)
     assert "Infinity" not in s and "NaN" not in s
-    assert set(d) == {"description", "mode", "layout", "metric", "metric_meaning", "a", "b", "shape", "table", "top"}
+    assert set(d) == {"description", "mode", "layout", "metric", "metric_meaning", "a", "b", "shape", "table", "top", "drivers"}
     assert d["a"]["rows"] + d["b"]["rows"] == len(v.data) and len(d["top"]) <= 4
     assert d["a"]["total"] is not None
     ctx = c.llm_context(top=2)
@@ -375,3 +376,90 @@ def test_compare_and_facet_do_not_crash_on_adversarial_input(df_fn, split):
     f.render()
     json.dumps(f.to_dict())
     f.toggle().html()
+
+
+# --------------------------------------------------------------------------- significance and drivers
+
+
+def test_top_has_p_for_count_measures_only(fw):
+    c = p2h.compare(fw, action="deny", rows=["dst_port"], cols=["protocol"], agg="count")
+    t = c.top(5)
+    assert "p" in t.columns and list(t.columns)[-2:] == ["p", "only_in"]
+    assert ((t["p"] >= 0) & (t["p"] <= 1)).all()
+    assert t["p"].min() < 0.05 / c.shape[0] / c.shape[1]  # the top mover survives Bonferroni
+    assert c.is_count
+    s = p2h.compare(fw, action="deny", rows=["dst_port"], cols=["protocol"], values="bytes", agg="sum")
+    assert "p" not in s.top(5).columns and not s.is_count
+
+
+def test_gtest_matches_hand_computation():
+    from pivot2hist._compare import _gtest_p
+
+    a = np.array([[30.0, 70.0]])
+    b = np.array([[10.0, 90.0]])
+    p = _gtest_p(a, b)
+    # 2x2 for cell (0,0): [[30, 70], [10, 90]] -> G = 2 * sum(O ln(O/E))
+    obs = np.array([30, 70, 10, 90], dtype=float)
+    exp = np.array([100 * 40 / 200, 100 * 160 / 200, 100 * 40 / 200, 100 * 160 / 200])
+    g = 2 * np.sum(obs * np.log(obs / exp))
+    assert p[0, 0] == pytest.approx(math.erfc(math.sqrt(g / 2)), rel=1e-9)
+    assert p[0, 0] < 0.001 and p[0, 1] == pytest.approx(p[0, 0])  # the complement cell is the same test
+    # identical shares: p = 1; a cell empty on both sides: NaN; an empty side: all NaN
+    assert _gtest_p(np.array([[5.0, 5.0]]), np.array([[50.0, 50.0]]))[0, 0] == pytest.approx(1.0)
+    assert np.isnan(_gtest_p(np.array([[0.0, 5.0]]), np.array([[0.0, 5.0]]))[0, 0])
+    assert np.isnan(_gtest_p(np.array([[1.0, 2.0]]), np.array([[0.0, 0.0]]))).all()
+
+
+def test_drivers_name_columns_off_the_table(fw):
+    c = p2h.compare(fw, action="deny", rows=["dst_port"], cols=["protocol"], agg="count")
+    d = c.drivers()
+    assert list(d.columns) == ["column", "kind", "value", "share_a", "share_b", "lift", "median_a", "median_b", "ratio", "score", "text"]
+    assert not d.empty and len(d) <= 8
+    assert not (set(d["column"]) & {"dst_port", "protocol", "action"})  # axes and the split column are excluded
+    assert (d["score"].diff().dropna() <= 0).all()  # best first
+    assert "bytes" in set(d["column"])  # denies are small transfers in the sample
+    row = d[d["column"] == "bytes"].iloc[0]
+    assert row["kind"] == "numeric" and row["median_a"] < row["median_b"] and "action=deny" in row["text"] and "rest" in row["text"]
+    labels = d[d["kind"] == "label"]
+    assert (labels["share_a"].notna() & labels["share_b"].notna() & labels["lift"].notna()).all()
+    assert c.drivers(2).equals(d.head(2)) or len(c.drivers(2)) == 2
+
+
+def test_drivers_are_symmetric(fw):
+    # a value that is common on side B but rare on side A is a driver too
+    c = p2h.compare(fw, action="deny", rows=["dst_port"], cols=["protocol"], agg="count")
+    d = c.drivers(20)
+    assert (d["lift"].dropna() < 1).any() and (d["lift"].dropna() > 1).any()
+
+
+def test_drivers_skip_query_columns(fw):
+    v = p2h.fit(fw, rows=["dst_port"], cols=["action"], agg="count")
+    c = v.compare("bytes > 5000 and duration < 2")
+    assert c._split_columns() == ["bytes", "duration"]
+    assert not (set(c.drivers()["column"]) & {"bytes", "duration"})
+
+
+def test_drivers_of_a_two_view_comparison(fw):
+    v = p2h.fit(fw, rows=["dst_port"], cols=["action"], agg="count")
+    c = v.slice(country="US").compare(v.slice(country="CN"))
+    assert c._split_columns() == ["country"]
+    assert "country" not in set(c.drivers()["column"])
+    assert "p" in c.top(3).columns
+
+
+def test_to_dict_and_llm_context_carry_p_and_drivers(fw):
+    c = p2h.compare(fw, action="deny", rows=["dst_port"], cols=["protocol"], agg="count")
+    d = c.to_dict(3)
+    assert "drivers" in d and d["drivers"] and {"column", "kind", "score", "text"} <= set(d["drivers"][0])
+    assert all("p" in r for r in d["top"])
+    json.dumps(d)
+    ctx = c.llm_context(top=3)
+    assert "p=" in ctx["description"] and "what else differs" in ctx["description"]
+    assert ctx["metadata"]["drivers"] and "p" in ctx["metadata"]["top"][0]
+    assert "what else differs" in str(c.prompt("q?"))
+
+
+def test_agent_compare_returns_drivers(fw):
+    r = agent.compare(fw, split={"column": "action", "eq": "deny"}, rows=["dst_port"], cols=["protocol"], agg="count", n=3)
+    assert r["drivers"] and "text" in r["drivers"][0] and all("p" in t for t in r["top"])
+    json.dumps(r)

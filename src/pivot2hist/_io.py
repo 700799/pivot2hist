@@ -116,6 +116,7 @@ def infer_scalars(df: pd.DataFrame, *, min_frac: float = 0.98) -> pd.DataFrame:
                 if out is df:
                     out = df.copy()
                 col = pd.to_numeric(s.astype("string").str.strip().str.replace(",", "", regex=False), errors="coerce")
+                col = col.astype("float64")  # plain numpy dtype: the nullable Int64 to_numeric returns for a string input breaks folding
                 if col.dropna().mod(1).eq(0).all() and col.notna().all():
                     col = col.astype("int64")
                 out[c] = col

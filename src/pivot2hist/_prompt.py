@@ -89,8 +89,22 @@ def _view_section(view: Any, *, max_rows: int, max_cols: int) -> str:
     return "## Current view\n\n" + ctx["description"] + "\n\n" + ctx["table"]
 
 
-def _findings_section(view: Any, *, anomalies: bool, n_anomalies: int, insights: Any, sensitivity: float) -> str:
+def _findings_section(view: Any, *, anomalies: bool, n_anomalies: int, insights: Any, sensitivity: float,
+                      spikes: bool = True, n_spikes: int = 3) -> str:
     items = []
+    if spikes:
+        from ._spikes import default_time_column, describe_spike
+
+        column = default_time_column(view)
+        top = None
+        if column is not None and view.layout.rows:
+            try:
+                top = view.spikes(column, n=n_spikes)
+            except Exception:  # noqa: BLE001 - a bonus fact, not a requirement
+                top = None
+        if top is not None:
+            for r in top.itertuples():
+                items.append("- over time: " + describe_spike(r, view.layout.measure, column))
     if anomalies:
         try:
             top = view.anomalies(n_anomalies)
@@ -165,6 +179,8 @@ def build_prompt(
     profile: bool = True,
     anomalies: bool = True,
     n_anomalies: int = 3,
+    spikes: bool = True,
+    n_spikes: int = 3,
     insights: Any = False,
     sensitivity: float = 0.5,
     compare: Any = None,
@@ -181,8 +197,9 @@ def build_prompt(
             parts.append(_dataset(view))
         if table:
             parts.append(_view_section(view, max_rows=max_rows, max_cols=max_cols))
-        if anomalies or insights:
-            found = _findings_section(view, anomalies=anomalies, n_anomalies=n_anomalies, insights=insights, sensitivity=sensitivity)
+        if anomalies or insights or spikes:
+            found = _findings_section(view, anomalies=anomalies, n_anomalies=n_anomalies, insights=insights, sensitivity=sensitivity,
+                                      spikes=spikes, n_spikes=n_spikes)
             if found:
                 parts.append(found)
         c = _resolve_compare(view, compare)

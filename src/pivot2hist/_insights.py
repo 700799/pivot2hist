@@ -290,6 +290,59 @@ def _finding_anomalies(view: Any, *, max_cells: int = 3) -> List[Insight]:
     return out
 
 
+def _finding_spikes(view: Any, *, max_items: int = 3) -> List[Insight]:
+    """The strongest per-row movements over the first datetime column (see
+    :meth:`View.spikes`); nothing when the view has no time column to scan, or its rows
+    are that column's own buckets."""
+    from ._spikes import default_time_column, describe_spike
+    from ._spikes import spikes as _spikes
+
+    column = default_time_column(view)
+    if column is None or not view.layout.rows:
+        return []
+    try:
+        top = _spikes(view, column, n=max_items)
+    except Exception:
+        return []
+    out = []
+    for r in top.itertuples():
+        out.append(Insight(
+            "spike", (column,), _clip01(abs(r.score) / 8.0),
+            describe_spike(r, view.layout.measure, column) + ".",
+            {"row": r.row, "bucket": r.bucket, "kind": r.kind, "observed": r.observed, "expected": r.expected,
+             "ratio": (None if not np.isfinite(r.ratio) else r.ratio), "score": r.score, "support": int(r.support),
+             "baseline": r.baseline},
+        ))
+    return out
+
+
+def _finding_novelty(view: Any, *, max_items: int = 3) -> List[Insight]:
+    """What appeared in the last quarter of the time span (see :meth:`View.novel`), on the
+    guessed entity/attribute columns; nothing without a time column or an entity-like one."""
+    from ._novelty import default_entity_columns, default_time_column
+    from ._novelty import novelty as _novelty
+
+    if default_time_column(view) is None:
+        return []
+    entity, attr = default_entity_columns(view)
+    if entity is None:
+        return []
+    try:
+        top = _novelty(view, entity, attr, n=max_items)
+    except Exception:
+        return []
+    out = []
+    for r in top.itertuples():
+        out.append(Insight(
+            "novelty", tuple(c for c in (entity, attr) if c), _clip01(r.score / 12.0),
+            r.text + ".",
+            {"kind": r.kind, "entity": r.entity, "value": r.value, "before": int(r.before), "after": int(r.after),
+             "peers": (None if pd.isna(r.peers) else int(r.peers)), "score": r.score,
+             "since": str(top.attrs.get("since", ""))},
+        ))
+    return out
+
+
 def insights(
     view: Any, *, sensitivity: float = 0.5, max_findings: int = 15, max_pairs: int = 5, seed: int = 0
 ) -> Dict[str, Any]:
@@ -331,6 +384,8 @@ def insights(
     corr_cols = [c.name for c in prof if c.kind != ID and c.nunique >= 2]
     findings.extend(_finding_correlations(df, corr_cols, max_pairs=max_pairs))
     findings.extend(_finding_anomalies(view))
+    findings.extend(_finding_spikes(view))
+    findings.extend(_finding_novelty(view))
 
     threshold = 1.0 - sensitivity
     kept = sorted((f for f in findings if f.significance >= threshold), key=lambda f: -f.significance)[:max_findings]
