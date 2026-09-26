@@ -1050,8 +1050,12 @@ class View:
         negatives), all applying to pivots and histograms alike. Pivot: ``heat`` (``"table"`` | ``"column"``
         | ``"row"`` | ``"none"``), ``bars``, ``totals``, ``compact``, ``max_rows``,
         ``subtotals`` (a subtotal row after each outer row group), ``outline`` (nested
-        rows as collapsible groups). Histogram: ``stacked``, ``density``, ``log_y``,
-        ``width``, ``height``, ``show_values``.
+        rows as collapsible groups), ``sparklines`` (a datetime column: a trailing trend
+        column, one small inline-SVG line per row of this pivot's own measure over that
+        column, auto-bucketed to ``sparkline_points`` points, default 24 - each row scaled
+        to its own min/max, so it shows shape, not a magnitude comparable across rows; see
+        :func:`pivot2hist.sparkline_table` for the numbers behind it). Histogram:
+        ``stacked``, ``density``, ``log_y``, ``width``, ``height``, ``show_values``.
         """
         return self._clone(display={**self._display, **display})
 
@@ -1085,17 +1089,35 @@ class View:
                 stacked=bool(d.get("stacked", False)), log_y=bool(d.get("log_y", False)), show_values=d.get("show_values"),
                 theme=str(d.get("theme", "light")), chips=chips, removable_chips=removable_slices,
             )
+        spark_kw: Dict[str, Any] = {}
+        spark_col = d.get("sparklines")
+        if spark_col:
+            from ._sparkline import sparkline_table
+
+            spark_df, spark_labels = sparkline_table(self, spark_col, max_points=int(d.get("sparkline_points", 24)))
+            spark_kw = {"sparklines": spark_df.to_numpy(dtype=float, copy=True), "sparkline_labels": spark_labels}
         return pivot_html(
             self.pivot(), title=t, heat=str(d.get("heat", "table")), bars=bool(d.get("bars", False)),
             totals=bool(d.get("totals", False)), compact=bool(d.get("compact", False)), max_rows=d.get("max_rows"),
             subtotals=bool(d.get("subtotals", False)), outline=bool(d.get("outline", False)),
             agg=self._layout.agg if self._layout.values is not None else "count", theme=str(d.get("theme", "light")),
-            chips=chips, removable_chips=removable_slices,
+            chips=chips, removable_chips=removable_slices, **spark_kw,
         )
 
     def svg(self) -> str:
         """The histogram of this view as SVG (toggles to histogram mode if needed)."""
         return self.as_hist().html()
+
+    def sparklines(self, column: str, *, max_points: int = 24) -> pd.DataFrame:
+        """One trend series per row of this pivot's table: the measure aggregated into up
+        to ``max_points`` buckets of the datetime column ``column``, column axis
+        collapsed. The numbers behind ``v.style(sparklines=column)`` - call this directly
+        to inspect, export or chart them yourself; see :func:`pivot2hist.sparkline_table`.
+        """
+        from ._sparkline import sparkline_table
+
+        table, _labels = sparkline_table(self, column, max_points=max_points)
+        return table
 
     def distribution(self, column: str, **kw: Any) -> Optional[DistFit]:
         """Best-fitting probability distribution for a numeric column of the sliced data

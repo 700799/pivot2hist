@@ -215,6 +215,56 @@ def _group_reduce(block: pd.DataFrame, agg: str) -> Optional[np.ndarray]:
         return np.nanmean(vals, axis=0)
 
 
+def _sparkline_svg(values: np.ndarray, *, width: int = 56, height: int = 18, theme: str = "light") -> str:
+    """A tiny inline-SVG trend line for one row, scaled to *that row's own* min/max -
+    a sparkline shows shape (rising? falling? spiky?), not a magnitude comparable across
+    rows (use the heatmap columns for that)."""
+    p = _pal(theme)
+    v = np.asarray(values, dtype=float)
+    finite = np.isfinite(v)
+    color = p["palette"][0]
+    if not finite.any():
+        return f"<span style='color:{p['empty_text']};font-size:10px'>—</span>"
+    lo, hi = float(v[finite].min()), float(v[finite].max())
+    span = hi - lo
+    pad = 2.0
+
+    def y_of(x: float) -> float:
+        return height / 2 if span <= 0 else pad + (height - 2 * pad) * (1 - (x - lo) / span)
+
+    if v.size == 1:
+        cx, cy = width / 2, y_of(v[0])
+        return f"<svg width='{width}' height='{height}' style='display:block'><circle cx='{cx:.1f}' cy='{cy:.1f}' r='2' fill='{color}'/></svg>"
+    step = width / (v.size - 1)
+    pts = [f"{i * step:.1f},{y_of(x):.1f}" for i, x in enumerate(v) if np.isfinite(x)]
+    if not pts:
+        return f"<span style='color:{p['empty_text']};font-size:10px'>—</span>"
+    last = pts[-1].split(",")
+    dot = f"<circle cx='{last[0]}' cy='{last[1]}' r='1.6' fill='{color}'/>"
+    return (
+        f"<svg width='{width}' height='{height}' style='display:block'>"
+        f"<polyline points='{' '.join(pts)}' fill='none' stroke='{color}' stroke-width='1.3' "
+        f"stroke-linejoin='round' stroke-linecap='round'/>{dot}</svg>"
+    )
+
+
+def _sparkline_cell(values: np.ndarray, labels: Sequence[str], *, theme: str, compact: bool) -> str:
+    p = _pal(theme)
+    v = np.asarray(values, dtype=float)
+    finite = np.isfinite(v)
+    if finite.any():
+        lo, hi = float(v[finite].min()), float(v[finite].max())
+        cur = next((float(x) for x in v[::-1] if np.isfinite(x)), None)
+        span = f"{labels[0]} .. {labels[-1]}" if labels else f"{v.size} points"
+        tip = f"{span}: {fmt_cell(lo, compact=compact)} to {fmt_cell(hi, compact=compact)}"
+        if cur is not None:
+            tip += f", latest {fmt_cell(cur, compact=compact)}"
+    else:
+        tip = "no data in this window"
+    svg = _sparkline_svg(v, theme=theme)
+    return f"<td title='{_esc(tip)}' style='padding:2px 6px;background:{p['cell_bg']};border-left:1px solid {p['cell_border']}'>{svg}</td>"
+
+
 def pivot_html(
     table: pd.DataFrame,
     *,
@@ -235,6 +285,8 @@ def pivot_html(
     note: Optional[str] = None,
     chips: Optional[Sequence[str]] = None,
     removable_chips: bool = False,
+    sparklines: Optional[np.ndarray] = None,
+    sparkline_labels: Optional[Sequence[str]] = None,
 ) -> str:
     """Pivot table as an HTML heatmap. Cells carry the exact value as a tooltip.
 
@@ -258,16 +310,24 @@ def pivot_html(
     strings, same shape) replaces the per-cell hover text; ``note`` is a small footnote
     under the table; ``chips`` are the active slices, drawn under the title (see
     :func:`slice_chips`).
+
+    ``sparklines`` (one row per row of ``table``, one column per time bucket - see
+    :func:`pivot2hist.sparkline_table`) adds a trailing **trend** column: a small inline
+    SVG line of that row's own values, scaled to that row's own min/max (each row reads
+    its own shape, not a shared scale - a sparkline answers "is this one rising", not
+    "how does this compare to that one"), with the range and latest value as a tooltip.
+    ``sparkline_labels`` names the buckets for that tooltip. Disables ``outline``.
     """
     p = _pal(theme)
     wrap_kw: Dict[str, Any] = dict(theme=theme, chips=chips, removable_chips=removable_chips)
     if table.empty:
         return _wrap(title, f"<div style='color:{p['empty_text']};padding:8px'>(empty)</div>", **wrap_kw)
-    if outline and table.index.nlevels > 1 and heat_values is None:
+    if outline and table.index.nlevels > 1 and heat_values is None and sparklines is None:
         return _wrap(title, _outline_html(table, heat=heat, compact=compact, agg=agg, totals=totals, theme=theme), **wrap_kw)
     t = table
     if max_rows is not None and len(t) > max_rows:
         t = t.head(max_rows)
+    spark = np.asarray(sparklines, dtype=float)[: len(t)] if sparklines is not None else None
     values = t.to_numpy(dtype=float)
     colorable = np.isfinite(values)
     if heat == "none":
@@ -313,6 +373,8 @@ def pivot_html(
                 f"font-weight:600;border-left:1px solid {p['border_soft']}'>{_esc(col_labels[j][lvl])}</th>"
             )
             j = k + 1
+        if spark is not None:
+            out.append(f"<th style='padding:4px 8px;background:{p['head_bg']};color:{p['head_muted']};text-align:left'>" + ("trend" if lvl == n_col_levels - 1 else "") + "</th>")
         if totals:
             out.append(f"<th style='padding:4px 8px;background:{p['head_bg']};text-align:right'>" + ("total" if lvl == n_col_levels - 1 else "") + "</th>")
         out.append("</tr>")
@@ -320,7 +382,8 @@ def pivot_html(
         out.append("<tr>")
         for r in range(n_row_levels):
             out.append(f"<th style='text-align:left;padding:2px 8px;background:{p['subhead_bg']};color:{p['subhead_text']};font-weight:500'>{_esc(row_names[r])}</th>")
-        out.append(f"<th colspan='{len(col_labels) + (1 if totals else 0)}' style='background:{p['subhead_bg']}'></th></tr>")
+        extra_cols = (1 if spark is not None else 0) + (1 if totals else 0)
+        out.append(f"<th colspan='{len(col_labels) + extra_cols}' style='background:{p['subhead_bg']}'></th></tr>")
     # ---- body
     row_sum = np.nansum(np.where(np.isfinite(values), values, 0.0), axis=1) if totals else None
     prev: Tuple[str, ...] = ()
@@ -333,10 +396,11 @@ def pivot_html(
             return ""
         label = " / ".join(row_labels[start][:-1])
         cells = "".join(f"<td style='{sub_style}'>{_esc(fmt_cell(float(v), compact=compact))}</td>" for v in block)
+        spark_td = f"<td style='background:{p['sub_bg']};border-top:1px solid {p['sub_border']}'></td>" if spark is not None else ""
         extra = f"<td style='{sub_style}'>{_esc(fmt_cell(float(np.nansum(block)), compact=compact))}</td>" if totals else ""
         return (
             f"<tr><td colspan='{n_row_levels}' style='padding:3px 8px;font-weight:600;background:{p['sub_bg']};border-top:1px solid {p['sub_border']};color:{p['sub_text']}'>"
-            f"{_esc(label)} ∑</td>{cells}{extra}</tr>"
+            f"{_esc(label)} ∑</td>{cells}{spark_td}{extra}</tr>"
         )
 
     group_start = 0
@@ -373,6 +437,8 @@ def pivot_html(
                 f"style='text-align:right;padding:3px 8px;{MONO};white-space:nowrap;"
                 f"background:{bg};color:{fg};border-left:1px solid {p['cell_border']}'>{cell}</td>"
             )
+        if spark is not None:
+            out.append(_sparkline_cell(spark[i], sparkline_labels or [], theme=theme, compact=compact))
         if totals:
             out.append(f"<td style='text-align:right;padding:3px 8px;{MONO};font-weight:600;background:{p['total_bg']};color:{p['cell_text']}'>{_esc(fmt_cell(row_sum[i], compact=compact))}</td>")
         out.append("</tr>")
@@ -385,6 +451,8 @@ def pivot_html(
         out.append(f"<td colspan='{n_row_levels}' style='padding:3px 8px;font-weight:600;background:{p['total_bg']};color:{p['cell_text']};border-top:1px solid {p['border']}'>total</td>")
         for j in range(values.shape[1]):
             out.append(f"<td style='text-align:right;padding:3px 8px;{MONO};font-weight:600;background:{p['total_bg']};color:{p['cell_text']};border-top:1px solid {p['border']}'>{_esc(fmt_cell(col_sum[j], compact=compact))}</td>")
+        if spark is not None:
+            out.append(f"<td style='background:{p['total_bg']};border-top:1px solid {p['border']}'></td>")
         out.append(f"<td style='text-align:right;padding:3px 8px;{MONO};font-weight:700;background:{p['total_bg_strong']};color:{p['cell_text']};border-top:1px solid {p['border']}'>{_esc(fmt_cell(float(col_sum.sum()), compact=compact))}</td>")
         out.append("</tr>")
     out.append("</table>")

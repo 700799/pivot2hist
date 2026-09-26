@@ -805,10 +805,17 @@ class Explorer:
         self.w_outline = W.Checkbox(value=bool(self.display.get("outline", False)), description="outline / collapsible groups")
         self.w_width = W.IntSlider(value=int(self.display.get("width", 760)), min=300, max=1600, step=20, description="Width", style=st)
         self.w_height = W.IntSlider(value=int(self.display.get("height", 340)), min=160, max=900, step=20, description="Height", style=st)
+        self.w_sparkline = W.Dropdown(options=[("(none)", None)] + [(c.name, c.name) for c in prof if c.kind == DATETIME],
+                                      value=self.display.get("sparklines"), description="Sparklines", style=st)
         style_tab = W.VBox([
             W.HBox([self.w_theme, self.w_heat, self.w_totals, self.w_bars, self.w_compact]),
             W.HBox([self.w_subtotals, self.w_outline]),
             W.HBox([self.w_width, self.w_height]),
+            W.HBox([self.w_sparkline]),
+            W.HTML(
+                "<i style='font-size:11px;color:#889'>a trailing trend column: one small line per row, this "
+                "pivot's own measure over the chosen time column, each row scaled to its own min/max</i>"
+            ),
         ])
 
         # -- fields tab: draggable columns with stats, dropped into Rows/Columns/Values/Slicers
@@ -1033,7 +1040,7 @@ class Explorer:
         for w in (self.w_on, self.w_by, self.w_nbins):
             w.observe(self._on_hist, names="value")
         for w in (self.w_stacked, self.w_density, self.w_logy, self.w_theme, self.w_heat, self.w_totals, self.w_bars,
-                  self.w_compact, self.w_subtotals, self.w_outline, self.w_width, self.w_height):
+                  self.w_compact, self.w_subtotals, self.w_outline, self.w_width, self.w_height, self.w_sparkline):
             w.observe(self._on_style, names="value")
         # slicer widgets wire themselves up in _make_slicer_widget, whether built here
         # (the capped Slicers tab) or on demand later (a field dropped into Fields tab)
@@ -1105,6 +1112,8 @@ class Explorer:
             self.w_width.value, self.w_height.value = int(d.get("width", 760)), int(d.get("height", 340))
             self.w_theme.value = str(d.get("theme", "light"))
             self.w_subtotals.value, self.w_outline.value = bool(d.get("subtotals")), bool(d.get("outline"))
+            spark = d.get("sparklines")
+            self.w_sparkline.value = spark if spark in [v for _, v in self.w_sparkline.options] else None
             rows, cols = self.spec.get("rows"), self.spec.get("cols")
             def names(specs: Any) -> Tuple[str, ...]:
                 out = []
@@ -1526,7 +1535,7 @@ class Explorer:
                 stacked=self.w_stacked.value, density=self.w_density.value, log_y=self.w_logy.value,
                 theme=self.w_theme.value, heat=self.w_heat.value, totals=self.w_totals.value, bars=self.w_bars.value,
                 compact=self.w_compact.value, subtotals=self.w_subtotals.value, outline=self.w_outline.value,
-                width=self.w_width.value, height=self.w_height.value,
+                width=self.w_width.value, height=self.w_height.value, sparklines=self.w_sparkline.value,
             )
             self.w_fields.theme = self.w_theme.value
         self._act(go)

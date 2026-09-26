@@ -35,6 +35,7 @@ v.llm_context()                    # description + metadata + a markdown table, 
 v.insights()                       # rich local summary: distributions, mixtures, anomalies, ranked findings — no LLM
 v.compare(action="deny")           # deny vs the rest on one shared layout: diverging heatmap, .top() movers, toggles too
 v.facet("action")                  # small multiples: one panel per value, same layout, one colour scale
+v.style(sparklines="timestamp")    # a trend column: one small line per row, that row's measure over time
 v.rows("22", "deny")               # the raw rows behind a cell, by the labels the table shows
 v.explain("22", "deny")            # why that cell: vs independence, shares, rank, and what sets its rows apart
 v.prompt("What's unusual here?")   # everything on screen as one paste-anywhere LLM prompt (no model is called)
@@ -269,6 +270,31 @@ JavaScript) that folds and unfolds in the notebook — both work with `totals=Tr
 v.style(subtotals=True, totals=True)
 v.style(outline=True)
 ```
+
+## Row trend sparklines
+
+A pivot cell answers "how much"; it says nothing about *trend*. Seeing whether traffic
+to port 3389 is rising currently means putting time on the column axis and reading two
+dozen numbers per row. `sparklines=` instead adds a trailing **trend** column: one small
+inline-SVG line per row, the view's own measure re-aggregated over an auto-bucketed
+datetime column, column axis collapsed — a "which rows are moving" scan a static
+cross-tab can't give you.
+
+```python
+v.style(sparklines="timestamp")            # a trend column, one line per row
+v.style(sparklines="timestamp", totals=True, bars=True)   # combines with every other style option
+v.sparklines("timestamp")                  # the numbers themselves, as a DataFrame (one row per pivot row)
+```
+
+Each row's line is scaled to **that row's own min/max** — a sparkline shows shape (rising?
+falling? spiky?), not a magnitude comparable across rows; use the heatmap columns for
+that. The time column is coarsened (minute up to year, the same ladder `histogram()` uses)
+until it fits `sparkline_points` buckets (default 24); hover a line for the bucket range,
+low/high and latest value. Subtotal, outline-group and total rows show a blank cell there
+rather than a rolled-up trend. Works in pivot or histogram mode, in every theme, and turns
+off `outline=True` (an outline's collapsible-group layout has no natural place for a
+trailing column) — set `sparklines=None` to clear it. In the explorer, the **Style** tab's
+Sparklines dropdown does the same thing.
 
 ## Toggle to histogram and back
 
@@ -739,7 +765,7 @@ in four groups, the everyday loop up front:
   finer), Chains (state, entity, time, probabilities, plus the most frequent 3-step
   chains);
 - **Output** — Style (theme, heat incl. `surprise`, totals, subtotals, outline, bars,
-  compact), Code (the Python reproducing the current view), **Export** (everything on
+  compact, sparklines), Code (the Python reproducing the current view), **Export** (everything on
   screen as one LLM prompt: build, copy, download — see *Export to an LLM prompt*);
 - **Session** — **Timeline** (checkpoints, see below), Profile, Data (the survey and
   plan), Stats (the seven costliest steps).

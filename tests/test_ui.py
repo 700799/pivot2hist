@@ -683,3 +683,28 @@ def test_gunmetal_theme_in_explorer(ex):
     assert "#1f262d" in ex.w_out.value and ex._CHROME_THEME["gunmetal"]["accent"] in ex.w_css.value
     assert ex._LOG_THEME["gunmetal"]["bg"] in ex.w_log.value
     assert "#1f262d" in ex.snapshot_html() and "v.style(theme='gunmetal')" in ex.code()
+
+
+# --------------------------------------------------------------------------- sparklines
+
+
+def test_style_tab_sparkline_dropdown(ex, fw):
+    names = [c for c, _ in ex.w_sparkline.options if c != "(none)"]
+    assert names == ["timestamp"]
+    ex.w_sparkline.value = "timestamp"
+    assert ex.display["sparklines"] == "timestamp" and "<svg" in ex.w_out.value
+    assert "v.style(sparklines='timestamp')" in ex.code()
+    ex.w_sparkline.value = None
+    assert ex.display["sparklines"] is None and "<svg" not in ex.w_out.value
+
+
+def test_sparkline_survives_undo_reset(ex):
+    ex.w_sparkline.value = "timestamp"
+    ex.w_theme.value = "graphite"
+    ex.w_undo.click()
+    assert ex.w_sparkline.value == "timestamp"  # only the theme change is undone
+    ex.w_undo.click()
+    assert ex.w_sparkline.value is None
+    ex.w_sparkline.value = "timestamp"
+    ex.w_reset.click()
+    assert ex.w_sparkline.value is None and "<svg" not in ex.w_out.value
