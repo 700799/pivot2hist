@@ -1,7 +1,7 @@
 import pytest
 
-import pivot2hist as p2h
-from pivot2hist import DEFAULT_QUESTION, Prompt
+import bts_pivot as p2h
+from bts_pivot import DEFAULT_QUESTION, Prompt
 
 
 @pytest.fixture(scope="module")

@@ -1,9 +1,9 @@
 import pytest
 
-import pivot2hist as p2h
+import bts_pivot as p2h
 
 W = pytest.importorskip("ipywidgets")
-from pivot2hist.ui import Explorer, explore  # noqa: E402
+from bts_pivot.ui import Explorer, explore  # noqa: E402
 
 
 @pytest.fixture
@@ -425,7 +425,7 @@ def test_compare_tab_present_and_idle(ex):
 
 
 def test_compare_tab_facet_then_split_then_metric(ex):
-    from pivot2hist import Comparison, Facets
+    from bts_pivot import Comparison, Facets
 
     ex.w_cmp_col.value = "action"
     assert isinstance(ex.comparison, Facets) and ex.w_cmp_out.value.count("action = ") == 3
@@ -509,7 +509,7 @@ def test_inspect_tab_present_and_pickers_follow_the_table(ex):
 
 
 def test_inspect_explain_rows_via_pickers_and_errors(ex, fw):
-    from pivot2hist import Explanation
+    from bts_pivot import Explanation
 
     ex.w_cell_explain.click()
     assert "pick a row" in ex.w_cell_out.value
@@ -615,7 +615,7 @@ def test_export_tab_builds_copies_and_downloads(ex):
     sections = [line for line in str(p).splitlines() if line.startswith("## ")]
     assert sections == ["## Dataset", "## Current view", "## Computed findings", "## Your task"]
     assert "characters" in ex.w_prompt_meta.value and "tokens" in ex.w_prompt_meta.value
-    assert "download='pivot2hist-prompt.md'" in ex.w_prompt_download.value and "data:text/markdown" in ex.w_prompt_download.value
+    assert "download='bts-pivot-prompt.md'" in ex.w_prompt_download.value and "data:text/markdown" in ex.w_prompt_download.value
     if hasattr(ex.w_prompt_copy, "text"):
         assert ex.w_prompt_copy.text == str(p)
     else:

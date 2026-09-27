@@ -5,8 +5,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import pivot2hist as p2h
-from pivot2hist import Comparison, Facets, agent
+import bts_pivot as p2h
+from bts_pivot import Comparison, Facets, agent
 
 
 @pytest.fixture(scope="module")
@@ -393,7 +393,7 @@ def test_top_has_p_for_count_measures_only(fw):
 
 
 def test_gtest_matches_hand_computation():
-    from pivot2hist._compare import _gtest_p
+    from bts_pivot._compare import _gtest_p
 
     a = np.array([[30.0, 70.0]])
     b = np.array([[10.0, 90.0]])

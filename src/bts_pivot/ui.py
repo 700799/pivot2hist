@@ -3,12 +3,12 @@ cluster, rendered with the dependency-free HTML/SVG graphics.
 
 ::
 
-    import pivot2hist as p2h
+    import bts_pivot as p2h
     p2h.explore(df)            # or view.explore()
 
-Needs ``ipywidgets`` (``pip install "pivot2hist[jupyter]"``). The explorer keeps a small
+Needs ``ipywidgets`` (``pip install "bts-pivot[jupyter]"``). The explorer keeps a small
 *recipe* (layout spec, options, slices, mode, histogram/cluster/style settings) and
-rebuilds the :class:`~pivot2hist.View` from it on every change, so the "Code" tab can
+rebuilds the :class:`~bts_pivot.View` from it on every change, so the "Code" tab can
 always show the equivalent Python.
 """
 from __future__ import annotations
@@ -24,7 +24,7 @@ import pandas as pd
 try:
     import ipywidgets as W
 except ImportError as e:  # pragma: no cover
-    raise ImportError("pivot2hist.ui needs ipywidgets: pip install 'pivot2hist[jupyter]'") from e
+    raise ImportError("bts_pivot.ui needs ipywidgets: pip install 'bts-pivot[jupyter]'") from e
 
 from ._binning import RULES, human
 from ._chains import sequences as _sequences
@@ -146,7 +146,7 @@ class Explorer:
 
         Re-profiling a wide or large frame is real work, and ``Explorer.__init__``
         normally does it every time; ``clone()`` skips it - the new explorer shares this
-        one's already-computed :class:`~pivot2hist.Profile` and underlying source frame
+        one's already-computed :class:`~bts_pivot.Profile` and underlying source frame
         (no copy) - and carries over the field highlights (:meth:`paint`) since those are
         about the columns, not this cell's particular layout. Everything else (the
         layout/slices/style recipe, undo history, checkpoints) starts fresh, so the two
@@ -166,7 +166,7 @@ class Explorer:
 
     def paint(self, name: str, color: Optional[str] = None) -> None:
         """Highlight field ``name`` in the Fields tab with ``color`` (a name from
-        :data:`pivot2hist.ui_fields.MARK_PALETTE` - ``"red"``, ``"orange"``, ``"yellow"``,
+        :data:`bts_pivot.ui_fields.MARK_PALETTE` - ``"red"``, ``"orange"``, ``"yellow"``,
         ``"green"``, ``"blue"``, ``"purple"`` - or any CSS color string); ``color=None``
         clears it. Marks are cosmetic bookkeeping only (they never affect the fitted
         layout or the data) and are carried along by :meth:`clone` and saved checkpoints.
@@ -391,7 +391,7 @@ class Explorer:
             self.w_prompt_copy.text = str(p)
         href = "data:text/markdown;charset=utf-8," + _quote(str(p))
         self.w_prompt_download.value = (
-            f"<a download='pivot2hist-prompt.md' href='{href}' style='font-size:12px;margin-left:8px'>Download .md</a>"
+            f"<a download='bts-pivot-prompt.md' href='{href}' style='font-size:12px;margin-left:8px'>Download .md</a>"
         )
         self.w_prompt_meta.value = f"<span style='font-size:11px;color:#667'>{p.chars:,} characters ≈ {p.tokens:,} tokens</span>"
         return p
@@ -415,7 +415,7 @@ class Explorer:
 
     def compare_with_baseline(self, *, metric: Optional[str] = None) -> Optional[Comparison]:
         """The current view (side A) against the pinned baseline (side B) - see :meth:`pin`.
-        Renders into the Compare tab and returns the :class:`~pivot2hist.Comparison`."""
+        Renders into the Compare tab and returns the :class:`~bts_pivot.Comparison`."""
         if self._baseline is None:
             self.w_cmp_status.value = "<span style='color:#b00020;font-size:12px'>pin a baseline first</span>"
             return None
@@ -430,7 +430,7 @@ class Explorer:
         in step with it - every later change to the view re-runs the same comparison.
         Same forms: ``explorer.compare(action="deny")``, ``explorer.compare("action",
         "deny", "allow")``, ``explorer.compare("bytes > 1000")``. Returns the
-        :class:`~pivot2hist.Comparison`."""
+        :class:`~bts_pivot.Comparison`."""
         if metric is not None:
             self._set_metric(metric)
         self._compare_recipe = {"kind": "custom", "args": args, "kwargs": kwargs}
@@ -441,7 +441,7 @@ class Explorer:
 
     def facet(self, column: str, n: int = 6) -> Facets:
         """:meth:`View.facet` on the current view, rendered into the Compare tab and kept in
-        step with it. Returns the :class:`~pivot2hist.Facets`."""
+        step with it. Returns the :class:`~bts_pivot.Facets`."""
         self._compare_recipe = {"kind": "facet", "column": column, "n": n}
         self._refresh_compare()
         if not isinstance(self.comparison, Facets):
@@ -564,7 +564,7 @@ class Explorer:
 
     @staticmethod
     def _drivers_html(c: Comparison, k: int = 6) -> str:
-        """The comparison's :meth:`~pivot2hist.Comparison.drivers` as a short list under
+        """The comparison's :meth:`~bts_pivot.Comparison.drivers` as a short list under
         the heatmap: what else differs between the sides, beyond the table's axes."""
         try:
             d = c.drivers(k)
@@ -595,7 +595,7 @@ class Explorer:
     def explain(self, *args: Any, n_rows: Optional[int] = None, **labels: Any) -> Explanation:
         """:meth:`View.explain` on the current view, shown in the Inspect tab. With no cell
         given, explains the cell picked there (or the one last clicked). Returns the
-        :class:`~pivot2hist.Explanation`."""
+        :class:`~bts_pivot.Explanation`."""
         if not args and not labels:
             args = self._picked_cell()
         n = self.w_cell_n.value if n_rows is None else int(n_rows)
@@ -1272,7 +1272,7 @@ class Explorer:
         for f in ("max_rows", "max_cols", "layers", "bins", "scale", "order", "variants"):
             if getattr(self.options, f) != getattr(d, f):
                 opts[f] = getattr(self.options, f)
-        lines = ["import pivot2hist as p2h", ""]
+        lines = ["import bts_pivot as p2h", ""]
         src = "df"
         if self.reduce["sample"]:
             src = f"df.sample({self.reduce['sample']}, random_state=0)"

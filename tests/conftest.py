@@ -1,7 +1,7 @@
 import pandas as pd
 import pytest
 
-import pivot2hist as p2h
+import bts_pivot as p2h
 
 
 @pytest.fixture(scope="session")

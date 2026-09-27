@@ -3,8 +3,8 @@ import json
 import pandas as pd
 import pytest
 
-import pivot2hist as p2h
-from pivot2hist._llm import markdown_table
+import bts_pivot as p2h
+from bts_pivot._llm import markdown_table
 
 
 @pytest.fixture(scope="module")

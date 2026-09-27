@@ -1,8 +1,8 @@
 import numpy as np
 import pandas as pd
 
-import pivot2hist as p2h
-from pivot2hist._profile import BOOLEAN, CATEGORICAL, CONSTANT, DATETIME, ID, NUMERIC
+import bts_pivot as p2h
+from bts_pivot._profile import BOOLEAN, CATEGORICAL, CONSTANT, DATETIME, ID, NUMERIC
 
 
 def test_kinds_on_firewall(fw):

@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import pivot2hist as p2h
+import bts_pivot as p2h
 
 
 def test_clone_shares_source_but_is_independent(fw):

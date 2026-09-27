@@ -294,7 +294,7 @@ def pivot_html(
     and column axes would predict (a Pearson residual against ``row_total x col_total /
     grand_total``), rather than by raw magnitude — a table can look uneven under
     ``heat="table"`` while nothing in it is actually surprising, or vice versa. See
-    :func:`pivot2hist.View.anomalies` for the same computation as a ranked list.
+    :func:`bts_pivot.View.anomalies` for the same computation as a ranked list.
 
     With nested rows, ``subtotals`` adds a subtotal row after every outer group (using the
     table's ``agg``: sums add up, min/max/mean roll up accordingly) and ``outline`` draws
@@ -312,7 +312,7 @@ def pivot_html(
     :func:`slice_chips`).
 
     ``sparklines`` (one row per row of ``table``, one column per time bucket - see
-    :func:`pivot2hist.sparkline_table`) adds a trailing **trend** column: a small inline
+    :func:`bts_pivot.sparkline_table`) adds a trailing **trend** column: a small inline
     SVG line of that row's own values, scaled to that row's own min/max (each row reads
     its own shape, not a shared scale - a sparkline answers "is this one rising", not
     "how does this compare to that one"), with the range and latest value as a tooltip.
@@ -568,7 +568,7 @@ def _wrap(title: Optional[str], body: str, *, theme: str = "light", chips: Optio
     outer = ""
     if p["page_bg"]:
         outer = f";background:{p['page_bg']};padding:{('10px' if p['panel_pad'] != '0' else '0')};border-radius:{p['panel_radius']}"
-    return f"<div class='pivot2hist' data-p2h-theme='{theme}' style='display:inline-block;max-width:100%;overflow-x:auto{outer}'>{head}{body}</div>"
+    return f"<div class='bts-pivot' data-p2h-theme='{theme}' style='display:inline-block;max-width:100%;overflow-x:auto{outer}'>{head}{body}</div>"
 
 
 def grid_html(panels: List[str], *, title: Optional[str] = None, note: Optional[str] = None, theme: str = "light") -> str:
@@ -611,7 +611,7 @@ def hist_svg(
     Rows are the bins on the x axis (multi-level rows are drawn as labelled groups),
     columns are the series (one colour each, side by side or stacked), and every bar
     carries a tooltip. ``density`` is an optional ``(x, y)`` curve drawn over a numeric
-    axis, e.g. from :func:`pivot2hist.bin_edges`'s sibling :func:`kde`. ``theme`` is
+    axis, e.g. from :func:`bts_pivot.bin_edges`'s sibling :func:`kde`. ``theme`` is
     ``"light"`` (default) or ``"graphite"`` (dark). ``vmax`` fixes the top of the y axis
     (default: the tallest bar), so several charts can share one scale. ``chips`` are the
     active slices, drawn above the chart (see :func:`slice_chips`).

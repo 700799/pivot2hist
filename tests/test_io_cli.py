@@ -6,8 +6,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import pivot2hist as p2h
-from pivot2hist.cli import main, parse_slice
+import bts_pivot as p2h
+from bts_pivot.cli import main, parse_slice
 
 
 def test_load_records_and_dict_and_array():
@@ -83,8 +83,8 @@ def test_cli_no_args_prints_help(capsys, monkeypatch):
 
 
 def test_cli_entry_point_installed():
-    r = subprocess.run([sys.executable, "-m", "pivot2hist", "--version"], capture_output=True, text=True)
-    assert r.returncode == 0 and "pivot2hist" in r.stdout
+    r = subprocess.run([sys.executable, "-m", "bts_pivot", "--version"], capture_output=True, text=True)
+    assert r.returncode == 0 and "bts-pivot" in r.stdout
 
 
 def test_infer_scalars_and_index_and_duplicates():

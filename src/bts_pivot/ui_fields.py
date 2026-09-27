@@ -62,7 +62,7 @@ def _numeric_glyph(s: pd.Series, *, seed: int = 0) -> Optional[List[float]]:
 
 def _datetime_glyph(s: pd.Series) -> Optional[List[float]]:
     """A ``_GLYPH_POINTS``-bar relative histogram of row counts over time (auto-coarsened
-    the same way :func:`pivot2hist.View.histogram` buckets a time column)."""
+    the same way :func:`bts_pivot.View.histogram` buckets a time column)."""
     valid = s.dropna()
     if valid.size < 5:
         return None

@@ -3,8 +3,8 @@ import xml.dom.minidom
 import pandas as pd
 import pytest
 
-import pivot2hist as p2h
-from pivot2hist.ui_fields import (
+import bts_pivot as p2h
+from bts_pivot.ui_fields import (
     FIELD_THEMES,
     HAS_ANYWIDGET,
     MARK_PALETTE,
@@ -106,7 +106,7 @@ def test_make_field_list_dispatch(prof):
 
 @pytest.mark.skipif(not HAS_ANYWIDGET, reason="anywidget not installed")
 def test_field_list_anywidget_traits_and_events(prof):
-    from pivot2hist.ui_fields import FieldList
+    from bts_pivot.ui_fields import FieldList
 
     fields = field_stats(prof)
     w = FieldList(fields=fields)
@@ -167,7 +167,7 @@ def test_make_field_list_constructor_marks(prof):
 
 @pytest.mark.skipif(not HAS_ANYWIDGET, reason="anywidget not installed")
 def test_field_list_anywidget_paint_and_unmark(prof):
-    from pivot2hist.ui_fields import FieldList
+    from bts_pivot.ui_fields import FieldList
 
     w = FieldList(fields=field_stats(prof))
     seen = []
@@ -185,7 +185,7 @@ def test_field_list_anywidget_paint_and_unmark(prof):
 
 
 def test_gunmetal_field_theme_and_js_table():
-    from pivot2hist.ui_fields import FIELD_THEMES, _ESM, theme_style_block
+    from bts_pivot.ui_fields import FIELD_THEMES, _ESM, theme_style_block
 
     assert set(FIELD_THEMES["gunmetal"]) == set(FIELD_THEMES["graphite"])
     assert "--p2h-bg:#1f262d" in theme_style_block("gunmetal")

@@ -2,8 +2,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import pivot2hist as p2h
-from pivot2hist._deps import dependency_pairs, mutual_info_matrix
+import bts_pivot as p2h
+from bts_pivot._deps import dependency_pairs, mutual_info_matrix
 
 rng = np.random.default_rng(3)
 

@@ -1,4 +1,4 @@
-# pivot2hist
+# bts-pivot
 
 Auto-fitted pivot tables that toggle to histograms and back, with slicing, clustering,
 a draggable field list, a dark modern theme, an MCP server for LLM agents and Jupyter
@@ -6,15 +6,15 @@ menus. Built for cyber logs (firewall, auth, DNS, EDR ...) but the type guessing
 generic, so it works on any tabular data.
 
 ```
-pip install pivot2hist                       # pandas + numpy only
-pip install "pivot2hist[jupyter]"            # + ipywidgets/anywidget for the interactive explorer
-pip install "pivot2hist[parquet,duckdb]"     # + pyarrow / duckdb sources (surveyed, paged, engine="duckdb")
-pip install "pivot2hist[cluster]"            # + scikit-learn for real HDBSCAN
-pip install "pivot2hist[mcp]"                # + an MCP server for LLM agents
+pip install bts-pivot                       # pandas + numpy only
+pip install "bts-pivot[jupyter]"            # + ipywidgets/anywidget for the interactive explorer
+pip install "bts-pivot[parquet,duckdb]"     # + pyarrow / duckdb sources (surveyed, paged, engine="duckdb")
+pip install "bts-pivot[cluster]"            # + scikit-learn for real HDBSCAN
+pip install "bts-pivot[mcp]"                # + an MCP server for LLM agents
 ```
 
 ```python
-import pivot2hist as p2h
+import bts_pivot as p2h
 
 v = p2h.fit("firewall.csv")        # a DataFrame, path, list of dicts ... anything tabular
 v                                  # notebook: heatmap pivot, best fit for a 40 x 12 box
@@ -45,9 +45,9 @@ v.prompt("What's unusual here?")   # everything on screen as one paste-anywhere 
 p2h.agent.pivot("firewall.csv", rows=["src_ip"], filters=[{"column": "action", "eq": "deny"}])  # plain JSON, for LLM agents
 ```
 
-Shell: `pivot2hist firewall.csv --slice action=deny --hist --on bytes --by dst_port`,
-`pivot2hist --demo firewall`. MCP server for any MCP client (Claude Code, Claude Desktop,
-...): `pivot2hist-mcp`.
+Shell: `bts-pivot firewall.csv --slice action=deny --hist --on bytes --by dst_port`,
+`bts-pivot --demo firewall`. MCP server for any MCP client (Claude Code, Claude Desktop,
+...): `bts-pivot-mcp`.
 
 ## How it works
 
@@ -61,8 +61,8 @@ the CLI) funnels through the same five steps; a `View` is immutable, so `.slice(
   p2h.fit / histogram / chains / regimes / dependencies(df, ...)
   p2h.explore(df)      -> Explorer (ipywidgets: drag fields, live re-fit)
   p2h.agent.*          -> plain JSON, for LLM tool-calling
-  pivot2hist-mcp       -> MCP server, same operations over stdio
-  CLI: pivot2hist FILE [--hist] [--slice ...] [--chains ...]
+  bts-pivot-mcp       -> MCP server, same operations over stdio
+  CLI: bts-pivot FILE [--hist] [--slice ...] [--chains ...]
               |
               v
   +------------------------------------------------------------------+
@@ -413,7 +413,7 @@ fit          92,436 rows x 11 cols -> sum(bytes) by dst_ip (top 39) x rule    2.
 pivot        sum(bytes) by dst_ip (top 39) x rule -> 40 x 8    0.71s  cpu  0.88s  mem    +44 MB
 ```
 
-**Engine**: `engine="duckdb"` (`pip install "pivot2hist[duckdb]"`) runs the group-by/
+**Engine**: `engine="duckdb"` (`pip install "bts-pivot[duckdb]"`) runs the group-by/
 aggregate that builds the table as SQL against DuckDB instead of `pandas.pivot_table`,
 for the dim kinds it can express there (categorical, binned, plain time buckets) - a
 semantic drill level or a cyclic time bucket fall back to pandas for that layout, same
@@ -469,7 +469,7 @@ backward EM, multi-sequence, no hmmlearn/scipy) trains a categorical-emission HM
 ```python
 p2h.regimes(df, "event", by="user", time="timestamp")            # rows = regime, cols = event
 p2h.regimes(df, "event", by="user", time="timestamp", n_states=3) # fix the regime count
-from pivot2hist import decode_regimes, fit_hmm
+from bts_pivot import decode_regimes, fit_hmm
 decode_regimes(df, "event", by="user", time="timestamp")          # just the regime Series
 ```
 
@@ -939,7 +939,7 @@ default and renders byte-identical to earlier releases.
 ## Export to an LLM prompt
 
 Everything on screen, packaged as one self-contained prompt for whichever model or chat
-you use — pivot2hist itself never calls one:
+you use — bts-pivot itself never calls one:
 
 ```python
 p = v.prompt("Which destination ports deserve a firewall rule, and why?")
@@ -982,14 +982,14 @@ client can offer "analyze this file" the way it offers its own slash-command pro
 
 ## For LLM agents
 
-`pivot2hist.agent` is a plain-JSON surface: every function takes and returns only
+`bts_pivot.agent` is a plain-JSON surface: every function takes and returns only
 `str`/`int`/`float`/`bool`/`None`/`list`/`dict` — never a DataFrame or a pandas/numpy
 object — so a tool-calling agent's framework can pass the model's arguments straight
 through and hand the result straight back, no pandas import on the caller's side.
 Docstrings there double as the tool descriptions below.
 
 ```python
-from pivot2hist import agent
+from bts_pivot import agent
 
 agent.describe("events.parquet")                          # columns, semantic types, time series; surveys, never fully loads
 agent.pivot("events.parquet", rows=["src_ip"], cols=["action"],
@@ -1007,7 +1007,7 @@ agent.prompt("events.parquet", question="What's unusual?", split={"column": "act
 ```
 
 Filter objects: `{"column": c, "eq"|"not_eq"|"in"|"range"|"gt"|"gte"|"lt"|"lte"|"regex"|"since"|"on": value}`
-or `{"query": "bytes > 1000 and action == 'deny'"}` (`pivot2hist.agent.FILTER_OPS` lists
+or `{"query": "bytes > 1000 and action == 'deny'"}` (`bts_pivot.agent.FILTER_OPS` lists
 the operators). Everything routes through `fit()`, so a huge file is surveyed and paged
 the same as in a notebook, and a paged result says `"paged": true` (`count`/`sum`/`min`/
 `max`/`mean` stay exact; other aggregations fall back to a sample and say
@@ -1032,16 +1032,16 @@ agent.llm_context("events.parquet", rows=["src_ip"], cols=["action"])
 Prefer `pivot()` when the result feeds back into your own code; prefer `llm_context()`
 when it's headed into a model's context window instead.
 
-**MCP server**: `pivot2hist-mcp` exposes the same operations to any MCP client — Claude
+**MCP server**: `bts-pivot-mcp` exposes the same operations to any MCP client — Claude
 Code, Claude Desktop, or your own agent — over stdio: the client spawns it as a local
 subprocess and talks to it over stdin/stdout, exactly like `npx`-launched Node MCP
 servers do, just with Python's own zero-persistent-install tools instead of `npx`. No
 server to host, no port to open, no npm/Node involved at all.
 
 ```
-uvx --from "pivot2hist[mcp]" pivot2hist-mcp     # zero install: uv fetches, runs, discards
-pipx run --spec "pivot2hist[mcp]" pivot2hist-mcp  # same idea, via pipx
-pip install "pivot2hist[mcp]" && pivot2hist-mcp   # or install it properly, if you'll use it a lot
+uvx --from "bts-pivot[mcp]" bts-pivot-mcp     # zero install: uv fetches, runs, discards
+pipx run --spec "bts-pivot[mcp]" bts-pivot-mcp  # same idea, via pipx
+pip install "bts-pivot[mcp]" && bts-pivot-mcp   # or install it properly, if you'll use it a lot
 ```
 
 Point your MCP client at whichever of those you prefer. For Claude Code, a project-level
@@ -1052,9 +1052,9 @@ shape under `mcpServers`:
 ```json
 {
   "mcpServers": {
-    "pivot2hist": {
+    "bts-pivot": {
       "command": "uvx",
-      "args": ["--from", "pivot2hist[mcp]", "pivot2hist-mcp"]
+      "args": ["--from", "bts-pivot[mcp]", "bts-pivot-mcp"]
     }
   }
 }
@@ -1091,8 +1091,8 @@ installed.
 You can also just run it directly, no client needed:
 
 ```
-pivot2hist-mcp                    # stdio server; what the config above launches
-python -m pivot2hist.mcp_server   # the same thing
+bts-pivot-mcp                    # stdio server; what the config above launches
+python -m bts_pivot.mcp_server   # the same thing
 ```
 
 ## Loading data
@@ -1114,7 +1114,7 @@ hash them, e.g. to build a category; the rest of the pipeline never sees the raw
 unhashable value). `inf`/`-inf`, extreme magnitudes, all-null columns, a single row, a
 single column, an empty frame, duplicate or non-string column names, mismatched
 tz-aware/naive datetimes — all either work as you'd expect or fail with a specific,
-pivot2hist-level message (never a bare `KeyError`/`IndexError` from three modules deep
+bts-pivot-level message (never a bare `KeyError`/`IndexError` from three modules deep
 in pandas or numpy) naming what's wrong and, where relevant, what's accepted instead.
 `tests/test_robustness.py` is the record of this: every case there traces back to a bug
 that was actually found and fixed, not a hypothetical.
@@ -1122,7 +1122,7 @@ that was actually found and fixed, not a hypothetical.
 ## CLI
 
 ```
-pivot2hist FILE [--hist] [--on COL] [--by COL,COL] [--bins N|rule] [--scale auto|linear|log]
+bts-pivot FILE [--hist] [--on COL] [--by COL,COL] [--bins N|rule] [--scale auto|linear|log]
                 [--rows COL,COL] [--cols COL,COL] [--values COL] [--agg sum|mean|...] [--count]
                 [--max-rows N] [--max-cols N] [--layers N] [--aspect R]
                 [--slice COL=VAL]... [--where EXPR]
@@ -1130,8 +1130,8 @@ pivot2hist FILE [--hist] [--on COL] [--by COL,COL] [--bins N|rule] [--scale auto
                 [--table T | --query SQL]   (duckdb://db.duckdb sources)
                 [--chains STATE --by ENTITY --time COL]
                 [-v] [--stats] [--json | --csv | --layout | --profile | --slicers] [--width N] [--ascii]
-pivot2hist --demo firewall|auth
-cat data.csv | pivot2hist -
+bts-pivot --demo firewall|auth
+cat data.csv | bts-pivot -
 ```
 
 ## Options
@@ -1179,16 +1179,20 @@ enough for PyPI — no Poetry migration needed, and definitely no Node/npm (that
 separate ecosystem for JavaScript packages; this is a pure-Python one, installed and run
 entirely with `pip`/`pipx`/`uv`).
 
-**One-time setup**, before the first release: on [pypi.org](https://pypi.org), under the
-project's *Publishing* settings, add a **trusted publisher** — GitHub owner `700799`,
-repository `pivot2hist`, workflow `publish.yml`, environment `pypi`. This lets GitHub
-Actions authenticate to PyPI via OIDC with no API token to create, store in a secret, or
-rotate later.
+**One-time setup**, before the first release: `bts-pivot` doesn't exist on PyPI yet, so
+there's no project *Publishing* settings page to use. Instead, go to
+[pypi.org/manage/account/publishing/](https://pypi.org/manage/account/publishing/) (under
+your PyPI account) and add a **pending trusted publisher** — PyPI project name
+`bts-pivot`, GitHub owner `700799`, repository `pivot2hist`, workflow `publish.yml`,
+environment `pypi`. The first successful publish from that workflow claims the project
+name and converts the pending publisher into a regular one. This lets GitHub Actions
+authenticate to PyPI via OIDC with no API token to create, store in a secret, or rotate
+later.
 
 **Every release** after that:
 
 ```
-# bump version in both pyproject.toml and src/pivot2hist/__init__.py (kept in sync)
+# bump version in both pyproject.toml and src/bts_pivot/__init__.py (kept in sync)
 git tag v0.13.0 && git push --tags
 # then, on GitHub: Releases -> Draft a new release -> pick the tag -> Publish
 ```

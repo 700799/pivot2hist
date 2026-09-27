@@ -2,8 +2,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import pivot2hist as p2h
-from pivot2hist._mixture import GMMFit, choose_gmm_k, fit_gmm, mixture_cutpoints
+import bts_pivot as p2h
+from bts_pivot._mixture import GMMFit, choose_gmm_k, fit_gmm, mixture_cutpoints
 
 rng = np.random.default_rng(1)
 

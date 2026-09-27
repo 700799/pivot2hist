@@ -2,8 +2,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import pivot2hist as p2h
-from pivot2hist._hmm import HMMFit, choose_hmm_states, decode_regimes, fit_hmm
+import bts_pivot as p2h
+from bts_pivot._hmm import HMMFit, choose_hmm_states, decode_regimes, fit_hmm
 
 rng = np.random.default_rng(1)
 

@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from pivot2hist._density import (
+from bts_pivot._density import (
     FAMILIES,
     DistFit,
     fit_distribution,

@@ -4,9 +4,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import pivot2hist as p2h
-from pivot2hist import agent
-from pivot2hist._novelty import COLUMNS, default_entity_columns, split_point
+import bts_pivot as p2h
+from bts_pivot import agent
+from bts_pivot._novelty import COLUMNS, default_entity_columns, split_point
 
 
 @pytest.fixture(scope="module")
@@ -150,7 +150,7 @@ def test_agent_and_mcp_novel(novel_df, tmp_path):
     pytest.importorskip("mcp")
     import asyncio
 
-    from pivot2hist import mcp_server
+    from bts_pivot import mcp_server
 
     path = tmp_path / "fw.csv"
     novel_df.to_csv(path, index=False)

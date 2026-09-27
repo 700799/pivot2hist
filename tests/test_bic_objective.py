@@ -2,8 +2,8 @@ import math
 
 import pytest
 
-import pivot2hist as p2h
-from pivot2hist._fit import Dim, FitOptions, OBJECTIVES, Shape, _bic_association, score_layout
+import bts_pivot as p2h
+from bts_pivot._fit import Dim, FitOptions, OBJECTIVES, Shape, _bic_association, score_layout
 
 
 def test_default_objective_is_heuristic_and_unchanged():

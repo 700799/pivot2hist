@@ -1,4 +1,4 @@
-"""Package a :class:`~pivot2hist.View` as context for an LLM: a short natural-language
+"""Package a :class:`~bts_pivot.View` as context for an LLM: a short natural-language
 description, compact structured metadata, and the table itself as GitHub-flavored
 markdown - the three things a model needs to reason about the data without re-deriving
 them from a raw dump, and without spending tokens on a full ``repr`` or a wall of JSON.
@@ -57,7 +57,7 @@ def markdown_table(df: pd.DataFrame, *, max_rows: int = 30, max_cols: int = 12) 
 
 
 def llm_context(view: Any, *, max_rows: int = 30, max_cols: int = 12, notes: bool = True) -> Dict[str, Any]:
-    """``{"description", "metadata", "table"}`` for ``view`` - see :func:`pivot2hist.llm_context`."""
+    """``{"description", "metadata", "table"}`` for ``view`` - see :func:`bts_pivot.llm_context`."""
     layout = view.layout
     prof = view.profile
     table = view.table()

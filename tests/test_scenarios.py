@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import pivot2hist as p2h
+import bts_pivot as p2h
 
 rng = np.random.default_rng(42)
 N = 600

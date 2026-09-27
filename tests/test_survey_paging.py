@@ -2,8 +2,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import pivot2hist as p2h
-from pivot2hist._survey import Machine, PagedSource, _conform, downcast, load_planned, survey
+import bts_pivot as p2h
+from bts_pivot._survey import Machine, PagedSource, _conform, downcast, load_planned, survey
 
 pq = pytest.importorskip("pyarrow")
 

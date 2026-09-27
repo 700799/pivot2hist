@@ -2,9 +2,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import pivot2hist as p2h
-from pivot2hist import FitOptions, Layout
-from pivot2hist._fit import build_table, fit_layout
+import bts_pivot as p2h
+from bts_pivot import FitOptions, Layout
+from bts_pivot._fit import build_table, fit_layout
 
 
 @pytest.mark.parametrize("box", [(40, 12), (20, 6), (10, 4), (8, 3)])

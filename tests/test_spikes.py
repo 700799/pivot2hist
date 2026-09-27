@@ -4,9 +4,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import pivot2hist as p2h
-from pivot2hist import agent
-from pivot2hist._spikes import COLUMNS, describe_spike, phase_keys
+import bts_pivot as p2h
+from bts_pivot import agent
+from bts_pivot._spikes import COLUMNS, describe_spike, phase_keys
 
 
 @pytest.fixture(scope="module")
@@ -195,7 +195,7 @@ def test_mcp_spikes_tool(tmp_path, bursty):
     pytest.importorskip("mcp")
     import asyncio
 
-    from pivot2hist import mcp_server
+    from bts_pivot import mcp_server
 
     path = tmp_path / "fw.csv"
     bursty.to_csv(path, index=False)

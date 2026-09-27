@@ -247,7 +247,7 @@ class Derived:
 class View:
     """A pivot table (or its histogram twin) over a frame, with slices.
 
-    Build one with :func:`pivot2hist.fit`; then chain :meth:`slice`, :meth:`toggle`,
+    Build one with :func:`bts_pivot.fit`; then chain :meth:`slice`, :meth:`toggle`,
     :meth:`histogram`, :meth:`refit`. ``str(view)`` renders it as text.
     """
 
@@ -370,7 +370,7 @@ class View:
 
     @property
     def survey(self) -> Optional[Survey]:
-        """Size survey of the source, when it was loaded through :func:`pivot2hist.fit`."""
+        """Size survey of the source, when it was loaded through :func:`bts_pivot.fit`."""
         return self._survey
 
     @property
@@ -714,7 +714,7 @@ class View:
 
         The score is the auto-fit's internal objective (entropy plus mutual information,
         minus sparsity/aspect/layer/other-bucket penalties, see
-        ``pivot2hist.DEFAULT_WEIGHTS``): higher is better, comparable only *within* one
+        ``bts_pivot.DEFAULT_WEIGHTS``): higher is better, comparable only *within* one
         call on one dataset, not across datasets or box sizes.
         """
         spec = {k: self._spec.get(k) for k in ("rows", "cols", "values", "agg")}
@@ -1054,7 +1054,7 @@ class View:
         column, one small inline-SVG line per row of this pivot's own measure over that
         column, auto-bucketed to ``sparkline_points`` points, default 24 - each row scaled
         to its own min/max, so it shows shape, not a magnitude comparable across rows; see
-        :func:`pivot2hist.sparkline_table` for the numbers behind it). Histogram:
+        :func:`bts_pivot.sparkline_table` for the numbers behind it). Histogram:
         ``stacked``, ``density``, ``log_y``, ``width``, ``height``, ``show_values``.
         """
         return self._clone(display={**self._display, **display})
@@ -1112,7 +1112,7 @@ class View:
         """One trend series per row of this pivot's table: the measure aggregated into up
         to ``max_points`` buckets of the datetime column ``column``, column axis
         collapsed. The numbers behind ``v.style(sparklines=column)`` - call this directly
-        to inspect, export or chart them yourself; see :func:`pivot2hist.sparkline_table`.
+        to inspect, export or chart them yourself; see :func:`bts_pivot.sparkline_table`.
         """
         from ._sparkline import sparkline_table
 
@@ -1152,7 +1152,7 @@ class View:
         behind it and ``|score| >= z``; sums and means of heavy-tailed quantities
         (bytes, latencies) are scored on a log scale. ``shifts=False`` reports single
         buckets only. Deterministic and local - no model call; see
-        :func:`pivot2hist.spikes` for the plain function.
+        :func:`bts_pivot.spikes` for the plain function.
         """
         from ._spikes import spikes as _spikes
 
@@ -1189,7 +1189,7 @@ class View:
         (log2 of the rows behind the finding, plus log2 of how rare the value was among
         entities), comparable across kinds; a finding needs ``min_support`` rows. Counted,
         not modelled, and local. Pairs with :meth:`spikes`: spikes say what grew, this
-        says what appeared. See :func:`pivot2hist.novel` for the plain function.
+        says what appeared. See :func:`bts_pivot.novel` for the plain function.
         """
         from ._novelty import novelty as _novelty
 
@@ -1199,7 +1199,7 @@ class View:
         """Best-fitting probability distribution for a numeric column of the sliced data
         (BIC over normal/lognormal/exponential/gamma/uniform/poisson/geometric/bernoulli/
         discrete-uniform), or ``None`` if there isn't enough data. See
-        :func:`pivot2hist.fit_distribution`."""
+        :func:`bts_pivot.fit_distribution`."""
         from ._density import fit_distribution
 
         if column not in self.data.columns:
@@ -1211,7 +1211,7 @@ class View:
         fit (component count chosen by BIC unless ``k`` is given), reported as a list of
         ``{"weight", "mean", "std"}`` dicts sorted by mean — e.g. two components at
         ~200 B and ~5 KB for a bimodal transfer-size column. ``None`` if there isn't
-        enough data. See :func:`pivot2hist.modes`."""
+        enough data. See :func:`bts_pivot.modes`."""
         from ._mixture import choose_gmm_k, fit_gmm
 
         if column not in self.data.columns:
@@ -1270,8 +1270,8 @@ class View:
         flavored markdown table, truncated (not sampled) to ``max_rows`` x ``max_cols``.
         Markdown, not HTML or a list of per-cell dicts, because it's both what a model
         has seen the most of and the cheapest in tokens. See
-        :func:`pivot2hist.llm_context` for the plain function, and
-        :func:`pivot2hist.agent.llm_context` for the JSON-source version.
+        :func:`bts_pivot.llm_context` for the plain function, and
+        :func:`bts_pivot.agent.llm_context` for the JSON-source version.
 
         ``notes=False`` skips the bonus anomaly check (cheap, but not free, and not
         every layout supports it - a 1-D pivot or a non-additive measure just skip it
@@ -1291,7 +1291,7 @@ class View:
         boolean; range for datetime) in ``"columns"``. On top of that, ``"findings"`` is
         a ranked list of what's actually notable: skew, a Gaussian-mixture check for
         multiple distinct populations in one numeric column (the "mixle"-inspired bit -
-        see :mod:`pivot2hist._mixture`), how concentrated a category is versus an even
+        see :mod:`bts_pivot._mixture`), how concentrated a category is versus an even
         split, outlier share, near-constant columns, id-like cardinality, the most
         mutually-informative column pairs, and - when the current layout is a real 2-D
         pivot - the most surprising cells (see :meth:`anomalies`). Each finding carries
@@ -1303,8 +1303,8 @@ class View:
 
         Cheap enough to call after every slice: distribution/mixture fits sample down to
         20k rows, and nothing here is more expensive than the pivot itself. See
-        :func:`pivot2hist.insights` for the plain function and
-        :func:`pivot2hist.agent.insights` for the JSON-source version.
+        :func:`bts_pivot.insights` for the plain function and
+        :func:`bts_pivot.agent.insights` for the JSON-source version.
         """
         from ._insights import insights as _insights
 
@@ -1448,7 +1448,7 @@ class View:
         try:
             import matplotlib.pyplot as plt
         except ImportError as e:  # pragma: no cover
-            raise ImportError("plotting needs matplotlib: pip install 'pivot2hist[plot]'") from e
+            raise ImportError("plotting needs matplotlib: pip install 'bts-pivot[plot]'") from e
         t = self.table()
         if ax is None:
             _, ax = plt.subplots(figsize=kw.pop("figsize", (9, 5)))

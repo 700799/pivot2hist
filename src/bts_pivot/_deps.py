@@ -3,7 +3,7 @@
 Every column is discretized (numeric/datetime: quantile bins; categorical/boolean:
 top-N + "(other)") and mutual information is computed on the joint histogram, with a
 Miller-Madow bias correction (the same one used for auto-fit layout scoring in
-:mod:`pivot2hist._fit`) so noisy high-cardinality pairs don't look falsely associated.
+:mod:`bts_pivot._fit`) so noisy high-cardinality pairs don't look falsely associated.
 MI is normalized to ``[0, 1]`` (MI / min(H(a), H(b))) so pairs of columns with very
 different cardinalities stay comparable.
 """

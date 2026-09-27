@@ -1,8 +1,8 @@
-"""pivot2hist: auto-fitted pivot tables that toggle to histograms and back, with slicing.
+"""bts-pivot: auto-fitted pivot tables that toggle to histograms and back, with slicing.
 
 Quick start::
 
-    import pivot2hist as p2h
+    import bts_pivot as p2h
 
     v = p2h.fit(df)               # auto-chooses rows/cols/measure to fit a 40x12 box
     print(v)                      # pivot table
@@ -158,7 +158,7 @@ def modes(data: Any, column: str, k: Optional[int] = None, **kw: Any) -> Optiona
     """How many peaks does this numeric column have, and where? A Gaussian mixture fit
     (component count chosen by BIC unless ``k`` is given), as a list of
     ``{"weight", "mean", "std"}`` dicts sorted by mean, or ``None`` if there isn't enough
-    data. No scipy/sklearn: EM from scratch, see :mod:`pivot2hist._mixture`.
+    data. No scipy/sklearn: EM from scratch, see :mod:`bts_pivot._mixture`.
     """
     df = load(data)
     if column not in df.columns:
@@ -192,7 +192,7 @@ def llm_context(
     GitHub-flavored markdown string, truncated to ``max_rows`` x ``max_cols``.
 
     Equivalent to ``p2h.fit(data, ...).llm_context(...)``; see :meth:`View.llm_context`
-    for what each field means, and :func:`pivot2hist.agent.llm_context` for the same
+    for what each field means, and :func:`bts_pivot.agent.llm_context` for the same
     thing from the plain-JSON agent surface (a source path/records instead of a frame,
     optional ``filters``).
     """
@@ -411,7 +411,7 @@ def regimes(
     ``state``), so you can see what each regime looks like and ``toggle()`` to a
     histogram of it.
 
-    A Baum-Welch fit (no hmmlearn/scipy, see :mod:`pivot2hist._hmm`) decodes each row
+    A Baum-Welch fit (no hmmlearn/scipy, see :mod:`bts_pivot._hmm`) decodes each row
     into one of a small number of hidden regimes from the sequence of ``state`` values,
     e.g. a user's logins drifting from a "normal" regime into a "credential-stuffing"
     regime. ``by`` keeps sequences inside an entity (user, source IP); ``time`` orders
@@ -437,7 +437,7 @@ def dependencies(data: Any, columns: Optional[Sequence[str]] = None, *, bins: in
     and scored by bias-corrected mutual information, so a categorical/numeric pair (e.g.
     ``protocol`` and ``dst_port``) shows up just as well as two numeric ones. ``.toggle()``
     turns it into a histogram of each column's total association with everything else.
-    See :func:`pivot2hist.mutual_info_matrix` for the plain matrix.
+    See :func:`bts_pivot.mutual_info_matrix` for the plain matrix.
     """
     df = load(data)
     long = dependency_pairs(df, columns, bins=bins, max_cols=max_cols)

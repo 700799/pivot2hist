@@ -2,8 +2,8 @@ import xml.dom.minidom
 
 import pandas as pd
 
-import pivot2hist as p2h
-from pivot2hist._html import heat_color, hist_svg, pivot_html
+import bts_pivot as p2h
+from bts_pivot._html import heat_color, hist_svg, pivot_html
 
 
 def _xml(s: str) -> None:
@@ -133,7 +133,7 @@ def test_view_style_theme_subtotals_outline(fw):
 
 
 def test_gunmetal_theme_renders_everywhere(fw):
-    from pivot2hist._html import PALETTES, THEMES, PALETTE_GUNMETAL
+    from bts_pivot._html import PALETTES, THEMES, PALETTE_GUNMETAL
 
     assert THEMES == ("light", "graphite", "gunmetal") and set(PALETTES["gunmetal"]) == set(PALETTES["graphite"])
     v = p2h.fit(fw, max_rows=8, max_cols=4)

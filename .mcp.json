@@ -1,8 +1,8 @@
 {
   "mcpServers": {
-    "pivot2hist": {
+    "bts-pivot": {
       "command": "uvx",
-      "args": ["--from", "pivot2hist[mcp]", "pivot2hist-mcp"]
+      "args": ["--from", "bts-pivot[mcp]", "bts-pivot-mcp"]
     }
   }
 }

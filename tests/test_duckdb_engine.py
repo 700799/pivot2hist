@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import pivot2hist as p2h
+import bts_pivot as p2h
 
 duckdb = pytest.importorskip("duckdb")
 
@@ -117,7 +117,7 @@ def test_unknown_engine_raises(auth):
 
 
 def test_connection_cache_reused_for_the_same_frame(auth):
-    from pivot2hist import _duckdb_engine as ddb
+    from bts_pivot import _duckdb_engine as ddb
 
     before = len(ddb._CONN_CACHE)
     df = auth.copy()
@@ -133,7 +133,7 @@ def test_connection_cache_is_bounded_lru(auth):
     # DuckDB's register() keeps its own strong reference to a registered frame, so the
     # cache can't rely on garbage collection to free entries (see _connection_for's
     # docstring) - it must evict on its own once the cache is full.
-    from pivot2hist import _duckdb_engine as ddb
+    from bts_pivot import _duckdb_engine as ddb
 
     frames = [auth.sample(200, random_state=i).copy() for i in range(ddb._CONN_CACHE_MAX + 3)]
     for f in frames:

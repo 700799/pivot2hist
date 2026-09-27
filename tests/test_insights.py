@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import pivot2hist as p2h
+import bts_pivot as p2h
 
 rng = np.random.default_rng(0)
 
@@ -135,7 +135,7 @@ def test_null_column_flagged_proportional_to_null_frac():
 def test_skewed_but_genuinely_varying_column_not_flagged_constant():
     # a heavy-tailed (exponential-like) column has a huge max/min range, which made an
     # earlier std/range heuristic falsely call it "near constant" - the real bug found
-    # against pivot2hist.sample.firewall_logs()'s `bytes` column.
+    # against bts_pivot.sample.firewall_logs()'s `bytes` column.
     x = rng.exponential(1000, 4000)
     df = pd.DataFrame({"a": x, "b": range(4000)})
     v = p2h.fit(df, rows=["a"], cols=None, values=None, agg=None)

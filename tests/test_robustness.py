@@ -1,13 +1,13 @@
 """Safety net for unusual/bad input: things that used to crash with an opaque, low-level
-error now either work or fail with a clear, pivot2hist-level message. Each test here
+error now either work or fail with a clear, bts-pivot-level message. Each test here
 traces back to a bug found by adversarial probing, not a hypothetical.
 """
 import numpy as np
 import pandas as pd
 import pytest
 
-import pivot2hist as p2h
-from pivot2hist._fit import FitOptions
+import bts_pivot as p2h
+from bts_pivot._fit import FitOptions
 
 
 def _round_trip(df, **kw):
@@ -111,14 +111,14 @@ def test_other_degenerate_options_degrade_gracefully(kw):
 
 
 def test_fit_gmm_empty_array_raises_clear_error():
-    from pivot2hist import fit_gmm
+    from bts_pivot import fit_gmm
 
     with pytest.raises(ValueError, match="at least 1 data point"):
         fit_gmm(np.empty((0, 1)), 2)
 
 
 def test_choose_gmm_k_empty_array_does_not_crash():
-    from pivot2hist import choose_gmm_k
+    from bts_pivot import choose_gmm_k
 
     assert choose_gmm_k(np.empty((0, 1))) == 1
 

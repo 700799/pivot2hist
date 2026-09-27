@@ -4,7 +4,7 @@ Every function here takes and returns only JSON-safe types (``str``, ``int``, ``
 ``bool``, ``None``, ``list``, ``dict``) — never a DataFrame, a numpy scalar or a pandas
 Timestamp — so an agent's tool-calling layer can pass its model-generated arguments
 straight through and hand the result straight back to the model, with no pandas import
-on the caller's side. Docstrings double as the tool descriptions :mod:`pivot2hist.mcp_server`
+on the caller's side. Docstrings double as the tool descriptions :mod:`bts_pivot.mcp_server`
 registers, so read them as the contract an agent sees.
 
 A typical exploration loop for an agent::
@@ -16,7 +16,7 @@ A typical exploration loop for an agent::
     suggest("events.parquet", n=5)                            # other layouts worth trying
     slicers("events.parquet", columns=["action", "country"]) # values to filter on
 
-Everything routes through :func:`pivot2hist.fit`, so large files are surveyed and paged
+Everything routes through :func:`bts_pivot.fit`, so large files are surveyed and paged
 the same way as in a notebook: a call never has to load more than the memory budget.
 """
 from __future__ import annotations
@@ -127,7 +127,7 @@ def describe(
     ``semantic`` type or ``None``, ``nunique``, ``null_frac``, ``examples``, and
     ``distribution`` when requested), ``rows_profiled``, ``is_time_series``,
     ``time_column``, and — for a file or DuckDB source — ``survey`` (disk size, estimated
-    memory, the load plan pivot2hist would use).
+    memory, the load plan bts-pivot would use).
     """
     from ._density import fit_distribution
     from ._io import load as _load

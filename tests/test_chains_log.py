@@ -4,9 +4,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import pivot2hist as p2h
-from pivot2hist._chains import sequences, steady_state, transition_matrix, transitions
-from pivot2hist._log import Log
+import bts_pivot as p2h
+from bts_pivot._chains import sequences, steady_state, transition_matrix, transitions
+from bts_pivot._log import Log
 
 
 @pytest.fixture(scope="module")

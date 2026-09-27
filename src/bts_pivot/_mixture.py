@@ -6,9 +6,9 @@ Two uses:
   cut between them at the valley of the combined density — bins that respect the data's
   actual shape (a bimodal byte-size column gets one bin range per mode) rather than
   arbitrary equal widths or hard k-means partitions.
-* **Soft clustering** (:func:`pivot2hist.View.cluster` with ``method="gmm"``): the hard
+* **Soft clustering** (:func:`bts_pivot.View.cluster` with ``method="gmm"``): the hard
   assignment (highest-responsibility component) becomes the cluster label, same interface
-  as the other cluster methods; :func:`pivot2hist.View.modes` reports the raw components
+  as the other cluster methods; :func:`bts_pivot.View.modes` reports the raw components
   (weight, mean, std) for a column, a compact "how many peaks, where" summary.
 """
 from __future__ import annotations

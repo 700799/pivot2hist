@@ -72,7 +72,7 @@ class FitOptions:
         Also try semantic drill levels (``/24`` subnets, port classes, URL hosts ...) and
         cyclic time buckets (hour of day, weekday) as alternative dimensions.
     max_categories / discrete_max / id_ratio:
-        Profiling thresholds, see :func:`pivot2hist.profile`.
+        Profiling thresholds, see :func:`bts_pivot.profile`.
     engine:
         ``"pandas"`` (default) or ``"duckdb"``: run the group-by/aggregate that builds
         the table as SQL against DuckDB instead of ``pandas.pivot_table``, for dims it

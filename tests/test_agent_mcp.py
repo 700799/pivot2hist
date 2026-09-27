@@ -2,8 +2,8 @@ import json
 
 import pytest
 
-import pivot2hist as p2h
-from pivot2hist import agent
+import bts_pivot as p2h
+from bts_pivot import agent
 
 
 def _assert_json_safe(obj):
@@ -118,7 +118,7 @@ mcp = pytest.importorskip("mcp")
 
 @pytest.fixture(scope="module")
 def mcp_server_module():
-    from pivot2hist import mcp_server
+    from bts_pivot import mcp_server
 
     return mcp_server
 
@@ -359,7 +359,7 @@ def test_agent_prompt(fw):
     )
     assert "## Comparison" in full["prompt"] and "## Cell in focus" in full["prompt"] and "Sliced to: protocol=TCP" in full["prompt"]
     assert "under metric 'delta'" in full["prompt"]
-    from pivot2hist import DEFAULT_QUESTION
+    from bts_pivot import DEFAULT_QUESTION
 
     assert full["question"] == DEFAULT_QUESTION
 

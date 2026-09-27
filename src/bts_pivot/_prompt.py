@@ -1,6 +1,6 @@
 """Package what is on screen as one self-contained prompt for any LLM.
 
-pivot2hist never calls a model. This turns the facts it computed locally - the dataset's
+bts-pivot never calls a model. This turns the facts it computed locally - the dataset's
 shape and column types, the current table with its slices, the surprising cells and
 ranked insights, a comparison, an explained cell - into one markdown document a model
 can reason over, with the question at the end. Paste it into any chat, hand it to an
@@ -25,7 +25,7 @@ DEFAULT_QUESTION = (
 
 HEADER = (
     "# Data analysis request\n\n"
-    "The facts below were computed locally by pivot2hist from the actual data; nothing here is invented "
+    "The facts below were computed locally by bts-pivot from the actual data; nothing here is invented "
     "or sampled from a model. Reason only from these facts, and quote specific cells and numbers when "
     "you do."
 )

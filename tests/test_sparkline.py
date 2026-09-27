@@ -1,8 +1,8 @@
 import pandas as pd
 import pytest
 
-import pivot2hist as p2h
-from pivot2hist import sparkline_table
+import bts_pivot as p2h
+from bts_pivot import sparkline_table
 
 
 @pytest.fixture(scope="module")

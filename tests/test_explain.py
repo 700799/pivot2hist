@@ -4,9 +4,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import pivot2hist as p2h
-from pivot2hist import Explanation
-from pivot2hist._html import expected_independence
+import bts_pivot as p2h
+from bts_pivot import Explanation
+from bts_pivot._html import expected_independence
 
 
 @pytest.fixture(scope="module")
