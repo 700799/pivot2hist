@@ -11,3 +11,4 @@ venv/
 .coverage
 htmlcov/
 .ipynb_checkpoints/
+.claude/settings.local.json
