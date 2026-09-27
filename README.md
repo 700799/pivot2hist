@@ -66,14 +66,14 @@ the CLI) funnels through the same five steps; a `View` is immutable, so `.slice(
               |
               v
   +------------------------------------------------------------------+
-  | 1. LOAD / SURVEY        bp.load()  or  bp.survey() + plan      |
+  | 1. LOAD / SURVEY        bp.load()  or  bp.survey() + plan        |
   |    fits the memory budget?  --yes-->  load fully, or downcast    |
   |    too big?                 --no -->  sample + page (see below)  |
   +------------------------------------------------------------------+
               |
               v
   +------------------------------------------------------------------+
-  | 2. PROFILE              bp.profile(df)                          |
+  | 2. PROFILE              bp.profile(df)                           |
   |    kind (numeric/categorical/datetime/boolean/id/constant)       |
   |    + semantic type (ipv4, port, url, email, domain, path, ...)   |
   +------------------------------------------------------------------+
@@ -134,8 +134,8 @@ same `View` rather than being a separate pipeline:
         +-- .anomalies()              --> row/col independence residuals (surprise)
         +-- .distribution(col)        --> best-fit probability family, by BIC
         +-- .modes(col)               --> Gaussian-mixture peaks (component count by BIC)
-        +-- bp.regimes(state, ...)   --> HMM-decoded regime column, itself a View
-        +-- bp.dependencies(df)      --> pairwise column mutual-information, a View
+        +-- bp.regimes(state, ...)    --> HMM-decoded regime column, itself a View
+        +-- bp.dependencies(df)       --> pairwise column mutual-information, a View
         +-- .cluster() / .cocluster() --> row / row+col groups
                                           (k-means, DBSCAN, HDBSCAN, GMM, spectral, MCL)
 ```
