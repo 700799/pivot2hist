@@ -4,14 +4,14 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import pivot2hist as p2h
-from pivot2hist._chains import sequences, steady_state, transition_matrix, transitions
-from pivot2hist._log import Log
+import bts_pivot as bp
+from bts_pivot._chains import sequences, steady_state, transition_matrix, transitions
+from bts_pivot._log import Log
 
 
 @pytest.fixture(scope="module")
 def auth():
-    return p2h.sample.auth_logs(2000, seed=2)
+    return bp.sample.auth_logs(2000, seed=2)
 
 
 def test_transitions_long_and_matrix(auth):
@@ -42,14 +42,14 @@ def test_sequences(auth):
 
 
 def test_chains_view(auth):
-    v = p2h.chains(auth, "event", by="user", time="timestamp")
+    v = bp.chains(auth, "event", by="user", time="timestamp")
     assert v.layout.rows[0].column == "from" and v.layout.cols[0].column == "to" and v.layout.measure == "sum(count)"
     assert v.pivot().shape == (3, 3) and "<table" in v.html() and v.toggle().mode == "hist"
-    n = p2h.chains(auth, "event", by="user", time="timestamp", normalize=True)
+    n = bp.chains(auth, "event", by="user", time="timestamp", normalize=True)
     assert np.allclose(n.pivot().sum(axis=1), 1.0) and n.display["heat"] == "row"
     assert v.cocluster(2).pivot().shape[0] == 3
     with pytest.raises(ValueError):
-        p2h.chains(pd.DataFrame({"s": ["a"]}), "s")
+        bp.chains(pd.DataFrame({"s": ["a"]}), "s")
 
 
 def test_log_steps_and_stats():
@@ -75,18 +75,18 @@ def test_log_steps_and_stats():
 
 
 def test_global_log_records_pipeline(capsys):
-    p2h.log.clear()
-    p2h.verbose()
+    bp.log.clear()
+    bp.verbose()
     try:
-        v = p2h.fit(p2h.sample.firewall_logs(500))
+        v = bp.fit(bp.sample.firewall_logs(500))
         v.pivot()
         v.html()
         v.toggle().render()
     finally:
-        p2h.verbose(False)
-    steps = {e.step for e in p2h.log.entries}
+        bp.verbose(False)
+    steps = {e.step for e in bp.log.entries}
     assert {"fit", "pivot", "render", "bins"} <= steps
-    st = p2h.stats(7)
+    st = bp.stats(7)
     assert len(st) <= 7 and "fit" in set(st["step"]) and v.stats(3).shape[0] <= 3
     err = capsys.readouterr().err
     assert "fit" in err and "pivot" in err

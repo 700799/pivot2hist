@@ -4,9 +4,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import pivot2hist as p2h
-from pivot2hist import agent
-from pivot2hist._spikes import COLUMNS, describe_spike, phase_keys
+import bts_pivot as bp
+from bts_pivot import agent
+from bts_pivot._spikes import COLUMNS, describe_spike, phase_keys
 
 
 @pytest.fixture(scope="module")
@@ -23,7 +23,7 @@ def bursty(fw):
 
 @pytest.fixture(scope="module")
 def v(bursty):
-    return p2h.fit(bursty, rows=["dst_port"], cols=["action"], agg="count")
+    return bp.fit(bursty, rows=["dst_port"], cols=["action"], agg="count")
 
 
 # --------------------------------------------------------------------------- detection
@@ -50,7 +50,7 @@ def test_silenced_port_is_a_shift_down(v):
 
 def test_seasonal_baseline_does_not_flag_the_daily_peak(fw):
     # untouched data: the daytime peak recurs every day, so nothing should read as ×10+
-    s = p2h.fit(fw, rows=["dst_port"], cols=["action"], agg="count").spikes("timestamp", n=50)
+    s = bp.fit(fw, rows=["dst_port"], cols=["action"], agg="count").spikes("timestamp", n=50)
     assert s.empty or s["ratio"].max() < 10
     assert (s["score"].abs() >= 3).all()
 
@@ -63,7 +63,7 @@ def test_median_baseline_by_contrast_flags_the_peak(v):
 
 def test_share_baseline_on_a_single_day(bursty):
     day = bursty[(bursty["timestamp"] >= "2026-03-04") & (bursty["timestamp"] < "2026-03-05")]
-    s = p2h.fit(day, rows=["dst_port"], agg="count").spikes("timestamp")
+    s = bp.fit(day, rows=["dst_port"], agg="count").spikes("timestamp")
     assert not s.empty
     top = s.iloc[0]
     assert top["baseline"] == "share" and top["row"] == "3389" and top["kind"] == "spike" and "14:00" in top["bucket"]
@@ -71,14 +71,14 @@ def test_share_baseline_on_a_single_day(bursty):
 
 def test_few_rows_fall_back_to_median(bursty):
     day = bursty[(bursty["timestamp"] >= "2026-03-04") & (bursty["timestamp"] < "2026-03-05")]
-    s = p2h.fit(day, rows=["action"], agg="count").spikes("timestamp")
+    s = bp.fit(day, rows=["action"], agg="count").spikes("timestamp")
     assert not s.empty and (s["baseline"] == "median").all()
     assert not ((s["kind"] == "drop") & (s["row"] == "allow")).any()  # no mirror-image "drop" from share arithmetic
 
 
 def test_share_needs_additive_measure(fw):
     with pytest.raises(ValueError, match="additive"):
-        p2h.fit(fw, rows=["dst_port"], values="bytes", agg="mean").spikes("timestamp", baseline="share")
+        bp.fit(fw, rows=["dst_port"], values="bytes", agg="mean").spikes("timestamp", baseline="share")
 
 
 def test_bad_arguments(v, fw):
@@ -89,9 +89,9 @@ def test_bad_arguments(v, fw):
     with pytest.raises(KeyError):
         v.spikes("nope")
     with pytest.raises(ValueError, match="row axis"):
-        p2h.fit(fw, rows=["timestamp"], cols=["action"]).spikes("timestamp")
+        bp.fit(fw, rows=["timestamp"], cols=["action"]).spikes("timestamp")
     with pytest.raises(ValueError, match="no datetime column"):
-        p2h.fit(fw.drop(columns=["timestamp"]), rows=["dst_port"]).spikes()
+        bp.fit(fw.drop(columns=["timestamp"]), rows=["dst_port"]).spikes()
     with pytest.raises(ValueError, match="no usable datetime"):
         v.spikes("protocol")
 
@@ -99,12 +99,12 @@ def test_bad_arguments(v, fw):
 def test_default_column_is_the_first_datetime_off_the_rows(v, fw):
     assert v.spikes().equals(v.spikes("timestamp"))
     # time on the column axis is fine: the column axis is collapsed anyway
-    s = p2h.fit(fw, rows=["dst_port"], cols=["timestamp"], agg="count").spikes()
+    s = bp.fit(fw, rows=["dst_port"], cols=["timestamp"], agg="count").spikes()
     assert list(s.columns) == COLUMNS
 
 
 def test_heavy_tailed_sums_are_scored_on_log_scale(bursty):
-    s = p2h.fit(bursty, rows=["dst_port"], cols=["action"], values="bytes", agg="sum").spikes("timestamp")
+    s = bp.fit(bursty, rows=["dst_port"], cols=["action"], values="bytes", agg="sum").spikes("timestamp")
     assert not s.empty and s["baseline"].str.endswith("(log)").all()
     assert ((s["row"] == "3389") & (s["kind"] == "spike")).any()
 
@@ -117,7 +117,7 @@ def test_flat_busy_row_is_not_a_spike():
     counts[10] = 1150
     ts = np.concatenate([np.full(c, t0 + pd.Timedelta(hours=6 * i)) for i, c in enumerate(counts)])
     df = pd.DataFrame({"t": ts, "k": "a"})
-    s = p2h.fit(df, rows=["k"], agg="count").spikes("t", baseline="median")
+    s = bp.fit(df, rows=["k"], agg="count").spikes("t", baseline="median")
     assert s.empty
 
 
@@ -127,16 +127,16 @@ def test_shifts_can_be_switched_off(v):
 
 
 def test_hist_and_one_d_layouts(bursty):
-    h = p2h.fit(bursty).histogram("bytes").spikes(n=3)
+    h = bp.fit(bursty).histogram("bytes").spikes(n=3)
     assert list(h.columns) == COLUMNS
-    one = p2h.fit(bursty, rows=["dst_port"], cols=[], agg="count").spikes(n=3)
+    one = bp.fit(bursty, rows=["dst_port"], cols=[], agg="count").spikes(n=3)
     assert one.iloc[0]["row"] == "3389"
 
 
 def test_top_level_function(bursty):
-    s = p2h.spikes(bursty, rows=["dst_port"], cols=["action"], agg="count", n=1)
+    s = bp.spikes(bursty, rows=["dst_port"], cols=["action"], agg="count", n=1)
     assert s.iloc[0]["row"] == "3389"
-    assert "auto" in p2h.SPIKE_BASELINES
+    assert "auto" in bp.SPIKE_BASELINES
 
 
 def test_phase_keys():
@@ -170,7 +170,7 @@ def test_insights_include_spike_finding(v):
 
 
 def test_insights_skip_spikes_without_a_time_column(fw):
-    report = p2h.fit(fw.drop(columns=["timestamp"]), rows=["dst_port"]).insights(sensitivity=1.0)
+    report = bp.fit(fw.drop(columns=["timestamp"]), rows=["dst_port"]).insights(sensitivity=1.0)
     assert not [f for f in report["findings"] if f["kind"] == "spike"]
 
 
@@ -195,7 +195,7 @@ def test_mcp_spikes_tool(tmp_path, bursty):
     pytest.importorskip("mcp")
     import asyncio
 
-    from pivot2hist import mcp_server
+    from bts_pivot import mcp_server
 
     path = tmp_path / "fw.csv"
     bursty.to_csv(path, index=False)

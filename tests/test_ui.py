@@ -1,9 +1,9 @@
 import pytest
 
-import pivot2hist as p2h
+import bts_pivot as bp
 
 W = pytest.importorskip("ipywidgets")
-from pivot2hist.ui import Explorer, explore  # noqa: E402
+from bts_pivot.ui import Explorer, explore  # noqa: E402
 
 
 @pytest.fixture
@@ -14,7 +14,7 @@ def ex(fw):
 def test_explorer_builds_and_renders(ex):
     assert isinstance(ex, Explorer)
     assert "<table" in ex.w_out.value and "pivot ·" in ex.w_out.value and ex.w_status.value == ""
-    assert "p2h.fit(df" in ex.code()
+    assert "bp.fit(df" in ex.code()
     assert ex._repr_mimebundle_() is not None
 
 
@@ -90,7 +90,7 @@ def test_errors_are_reported_not_raised(ex):
 
 
 def test_explore_accepts_view_and_records(fw):
-    v = p2h.fit(fw.head(300)).slice(action="allow")
+    v = bp.fit(fw.head(300)).slice(action="allow")
     ex = explore(v)
     assert ex.view.slices == ["action=allow"] and "# slice: action=allow" in ex.code()
     ex2 = explore(fw.head(50).to_dict("records"), max_rows=5)
@@ -121,7 +121,7 @@ def test_explorer_cluster_methods_cocluster_chains(ex, fw):
     ex.w_cocluster.value = None
     ex.w_state.value = "action"
     assert ex.mode == "chains" and ex.view.layout.rows[0].column == "from"
-    assert "p2h.chains(v.data, 'action')" in ex.code() and "chains" in ex.w_sequences.value
+    assert "bp.chains(v.data, 'action')" in ex.code() and "chains" in ex.w_sequences.value
     ex.w_chain_norm.value = True
     assert "normalize=True" in ex.code()
     ex.w_mode.value = "pivot"
@@ -132,7 +132,7 @@ def test_explorer_cluster_methods_cocluster_chains(ex, fw):
 def test_explorer_on_paged_source(tmp_path):
     pytest.importorskip("pyarrow")
     path = tmp_path / "fw.parquet"
-    p2h.sample.firewall_logs(20_000, seed=4).to_parquet(path, index=False)
+    bp.sample.firewall_logs(20_000, seed=4).to_parquet(path, index=False)
     ex = explore(str(path), memory_budget_mb=2, max_rows=8, max_cols=4)
     assert ex.view.paged is not None and "(paged" in ex.view.title() and "paged source" in ex.w_data.value
     ex.w_slicers["action"][1].value = ("deny",)
@@ -236,7 +236,7 @@ def test_theme_toggle(ex, fw):
 
 
 def test_subtotals_and_outline_toggles(fw):
-    v = p2h.fit(fw, rows=["severity", "action"], cols=["protocol"], agg="count", max_rows=15)
+    v = bp.fit(fw, rows=["severity", "action"], cols=["protocol"], agg="count", max_rows=15)
     ex = explore(v)
     ex.w_subtotals.value = True
     assert "∑" in ex.w_out.value
@@ -302,7 +302,7 @@ def test_clone_shares_source_and_profile_but_is_independent(ex, fw):
 
 
 def test_clone_with_explicit_view(ex, fw):
-    other = p2h.fit(fw, rows=["protocol"], cols=["action"])
+    other = bp.fit(fw, rows=["protocol"], cols=["action"])
     clone = ex.clone(view=other)
     try:
         assert clone.spec.get("rows") == ["protocol"]
@@ -425,7 +425,7 @@ def test_compare_tab_present_and_idle(ex):
 
 
 def test_compare_tab_facet_then_split_then_metric(ex):
-    from pivot2hist import Comparison, Facets
+    from bts_pivot import Comparison, Facets
 
     ex.w_cmp_col.value = "action"
     assert isinstance(ex.comparison, Facets) and ex.w_cmp_out.value.count("action = ") == 3
@@ -497,7 +497,7 @@ def test_inspect_tab_present_and_pickers_follow_the_table(ex):
     assert rows == [(str(x),) for x in ex.view.pivot().index] and cols == [(str(x),) for x in ex.view.pivot().columns]
     ex.w_rows.value = ("country",)
     assert [v for _, v in ex.w_cell_row.options if v is not None] == [(str(x),) for x in ex.view.pivot().index]
-    one_d = explore(p2h.fit(ex.view.source, rows=["action"], cols=[], agg="count"))
+    one_d = explore(bp.fit(ex.view.source, rows=["action"], cols=[], agg="count"))
     try:
         assert one_d.w_cell_col.options == (("(any column)", None),)
         assert [v for _, v in one_d.w_cell_row.options if v is not None] == [(str(x),) for x in one_d.view.pivot().index]
@@ -509,7 +509,7 @@ def test_inspect_tab_present_and_pickers_follow_the_table(ex):
 
 
 def test_inspect_explain_rows_via_pickers_and_errors(ex, fw):
-    from pivot2hist import Explanation
+    from bts_pivot import Explanation
 
     ex.w_cell_explain.click()
     assert "pick a row" in ex.w_cell_out.value
@@ -559,15 +559,15 @@ def test_tabs_are_grouped_and_selectable(ex):
 
 
 def test_slice_chips_render_in_notebook_html(fw):
-    v = p2h.fit(fw, max_rows=10, max_cols=4)
-    assert "data-p2h-slice" not in v.html()
+    v = bp.fit(fw, max_rows=10, max_cols=4)
+    assert "data-bp-slice" not in v.html()
     s = v.slice(action="deny").slice("bytes > 100")
     html = s.html()
-    assert html.count("data-p2h-slice") == 2 and "action=deny" in html and "bytes &gt; 100" in html
+    assert html.count("data-bp-slice") == 2 and "action=deny" in html and "bytes &gt; 100" in html
     assert "×" not in html.split("<table")[0]  # not removable in a plain notebook
     assert "×" in s.html(removable_slices=True).split("<table")[0]
-    assert "data-p2h-slice" not in s.html(title=False)
-    assert s.toggle().html().count("data-p2h-slice") == 2
+    assert "data-bp-slice" not in s.html(title=False)
+    assert s.toggle().html().count("data-bp-slice") == 2
     assert "slices: action=deny" in s.title() and "slices:" not in s.title(slices=False)
 
 
@@ -575,7 +575,7 @@ def test_slice_chips_remove_slices_and_reset_widgets(ex, fw):
     ex.w_slicers["action"][1].value = ("deny",)
     ex.w_query.value = "bytes > 100"
     ex.w_top_col.value = "src_ip"
-    assert len(ex.view.slices) == 3 and ex.w_out.value.count("data-p2h-slice") == 3
+    assert len(ex.view.slices) == 3 and ex.w_out.value.count("data-bp-slice") == 3
     ex.remove_slice("bytes > 100")
     assert "bytes > 100" not in ex.view.slices and ex.w_query.value == ""
     ex.remove_slice(next(s for s in ex.view.slices if "top" in s))
@@ -615,7 +615,7 @@ def test_export_tab_builds_copies_and_downloads(ex):
     sections = [line for line in str(p).splitlines() if line.startswith("## ")]
     assert sections == ["## Dataset", "## Current view", "## Computed findings", "## Your task"]
     assert "characters" in ex.w_prompt_meta.value and "tokens" in ex.w_prompt_meta.value
-    assert "download='pivot2hist-prompt.md'" in ex.w_prompt_download.value and "data:text/markdown" in ex.w_prompt_download.value
+    assert "download='bts-pivot-prompt.md'" in ex.w_prompt_download.value and "data:text/markdown" in ex.w_prompt_download.value
     if hasattr(ex.w_prompt_copy, "text"):
         assert ex.w_prompt_copy.text == str(p)
     else:
@@ -660,13 +660,13 @@ def test_export_errors_land_in_the_tab(ex):
 def test_topbar_clusters_and_tab_sections(ex):
     captions = []
     for box in ex.top.children:
-        assert "p2h-cluster" in box._dom_classes
+        assert "bp-cluster" in box._dom_classes
         captions.append(box.children[0].value)
     assert [c for c in ("view", "layout", "history") if any(c in cap for cap in captions)] == ["view", "layout", "history"]
     assert ex.w_mode in ex.top.children[0].children and ex.w_undo in ex.top.children[2].children
-    assert "p2h-groups" in ex.tabs._dom_classes and all("p2h-subtabs" in t._dom_classes for t in ex.tabs.children)
+    assert "bp-groups" in ex.tabs._dom_classes and all("bp-subtabs" in t._dom_classes for t in ex.tabs.children)
     css = ex.w_css.value
-    assert ".p2h-groups .lm-TabBar-tab" in css and ".p2h-subtabs .lm-TabBar-tab" in css and ".p2h-cluster{" in css
+    assert ".bp-groups .lm-TabBar-tab" in css and ".bp-subtabs .lm-TabBar-tab" in css and ".bp-cluster{" in css
     assert ex._CHROME_THEME["light"]["accent"] in css
     ex.w_theme.value = "graphite"
     assert ex._CHROME_THEME["graphite"]["accent"] in ex.w_css.value and ex._CHROME_THEME["graphite"]["field"] in ex.w_css.value
@@ -719,7 +719,7 @@ def test_fields_tab_chips_get_glyphs_from_the_source(ex):
 
 
 def test_compare_tab_lists_drivers_under_the_heatmap(fw):
-    ex = p2h.explore(fw)
+    ex = bp.explore(fw)
     ex.compare(action="deny")
     html = ex.w_cmp_out.value
     assert "what else differs between" in html and "<li>" in html

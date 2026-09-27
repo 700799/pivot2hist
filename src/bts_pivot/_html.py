@@ -294,7 +294,7 @@ def pivot_html(
     and column axes would predict (a Pearson residual against ``row_total x col_total /
     grand_total``), rather than by raw magnitude — a table can look uneven under
     ``heat="table"`` while nothing in it is actually surprising, or vice versa. See
-    :func:`pivot2hist.View.anomalies` for the same computation as a ranked list.
+    :func:`bts_pivot.View.anomalies` for the same computation as a ranked list.
 
     With nested rows, ``subtotals`` adds a subtotal row after every outer group (using the
     table's ``agg``: sums add up, min/max/mean roll up accordingly) and ``outline`` draws
@@ -312,7 +312,7 @@ def pivot_html(
     :func:`slice_chips`).
 
     ``sparklines`` (one row per row of ``table``, one column per time bucket - see
-    :func:`pivot2hist.sparkline_table`) adds a trailing **trend** column: a small inline
+    :func:`bts_pivot.sparkline_table`) adds a trailing **trend** column: a small inline
     SVG line of that row's own values, scaled to that row's own min/max (each row reads
     its own shape, not a shared scale - a sparkline answers "is this one rising", not
     "how does this compare to that one"), with the range and latest value as a tooltip.
@@ -433,7 +433,7 @@ def pivot_html(
                 cell = bar + cell
             tip = str(tips[i, j]) if tips is not None else (fmt(raw) if cell_format else fmt_cell(raw))
             out.append(
-                f"<td title='{_esc(tip)}' data-p2h-row='{_esc(json.dumps(list(labels)))}' data-p2h-col='{_esc(json.dumps(list(col_labels[j])))}' "
+                f"<td title='{_esc(tip)}' data-bp-row='{_esc(json.dumps(list(labels)))}' data-bp-col='{_esc(json.dumps(list(col_labels[j])))}' "
                 f"style='text-align:right;padding:3px 8px;{MONO};white-space:nowrap;"
                 f"background:{bg};color:{fg};border-left:1px solid {p['cell_border']}'>{cell}</td>"
             )
@@ -534,15 +534,15 @@ def _outline_html(table: pd.DataFrame, *, heat: str, compact: bool, agg: str, to
     ) + (f"<th style='text-align:right;padding:4px 8px;background:{p['head_bg']};color:{p['head_text']}'>total</th>" if totals else "")
     names = " > ".join(str(n) for n in table.index.names if n is not None)
     header = f"<table style='{tstyle}'>{colgroup}<tr><th style='text-align:left;padding:4px 8px;background:{p['head_bg']};color:{p['head_muted']}'>{_esc(names)}</th>{head}</tr></table>"
-    css = "<style>.p2h-outline details>summary::-webkit-details-marker{display:none}.p2h-outline details:not([open])>summary span:first-child{transform:rotate(0deg)}.p2h-outline details[open]>summary span:first-child{display:inline-block;transform:rotate(90deg)}</style>"
+    css = "<style>.bp-outline details>summary::-webkit-details-marker{display:none}.bp-outline details:not([open])>summary span:first-child{transform:rotate(0deg)}.bp-outline details[open]>summary span:first-child{display:inline-block;transform:rotate(90deg)}</style>"
     return (
-        f"<div class='p2h-outline' style='border:1px solid {p['outline_outer_border']};border-radius:{p['panel_radius']};overflow:auto;"
+        f"<div class='bp-outline' style='border:1px solid {p['outline_outer_border']};border-radius:{p['panel_radius']};overflow:auto;"
         f"display:inline-block;max-width:100%'>{css}{header}{block(table, shade, neg, 0)}</div>"
     )
 
 
 def slice_chips(chips: Sequence[str], *, theme: str = "light", removable: bool = False) -> str:
-    """The active slices as small chips, each carrying its label in ``data-p2h-slice``
+    """The active slices as small chips, each carrying its label in ``data-bp-slice``
     (the explorer's output pane turns a click on one into ``unslice``)."""
     if not chips:
         return ""
@@ -553,7 +553,7 @@ def slice_chips(chips: Sequence[str], *, theme: str = "light", removable: bool =
         style += ";cursor:pointer"
     x = f" <span style='color:{p['head_muted']};font-weight:600'>×</span>" if removable else ""
     items = "".join(
-        f"<span class='p2h-slice' data-p2h-slice='{_esc(c)}' title='{_esc('slice: ' + c + (' - click to remove' if removable else ''))}' "
+        f"<span class='bp-slice' data-bp-slice='{_esc(c)}' title='{_esc('slice: ' + c + (' - click to remove' if removable else ''))}' "
         f"style='{style}'>{_esc(c)}{x}</span>"
         for c in chips
     )
@@ -568,7 +568,7 @@ def _wrap(title: Optional[str], body: str, *, theme: str = "light", chips: Optio
     outer = ""
     if p["page_bg"]:
         outer = f";background:{p['page_bg']};padding:{('10px' if p['panel_pad'] != '0' else '0')};border-radius:{p['panel_radius']}"
-    return f"<div class='pivot2hist' data-p2h-theme='{theme}' style='display:inline-block;max-width:100%;overflow-x:auto{outer}'>{head}{body}</div>"
+    return f"<div class='bts-pivot' data-bp-theme='{theme}' style='display:inline-block;max-width:100%;overflow-x:auto{outer}'>{head}{body}</div>"
 
 
 def grid_html(panels: List[str], *, title: Optional[str] = None, note: Optional[str] = None, theme: str = "light") -> str:
@@ -611,7 +611,7 @@ def hist_svg(
     Rows are the bins on the x axis (multi-level rows are drawn as labelled groups),
     columns are the series (one colour each, side by side or stacked), and every bar
     carries a tooltip. ``density`` is an optional ``(x, y)`` curve drawn over a numeric
-    axis, e.g. from :func:`pivot2hist.bin_edges`'s sibling :func:`kde`. ``theme`` is
+    axis, e.g. from :func:`bts_pivot.bin_edges`'s sibling :func:`kde`. ``theme`` is
     ``"light"`` (default) or ``"graphite"`` (dark). ``vmax`` fixes the top of the y axis
     (default: the tallest bar), so several charts can share one scale. ``chips`` are the
     active slices, drawn above the chart (see :func:`slice_chips`).
@@ -690,7 +690,7 @@ def hist_svg(
             tip = f"{' / '.join(bins[i])}" + (f" · {series[j]}" if n_series > 1 else "") + f": {fmt_cell(table.iat[i, j])}"
             out.append(
                 f"<rect x='{x:.1f}' y='{y1:.1f}' width='{max(bar_w, 0.5):.1f}' height='{h:.1f}' fill='{color}' "
-                f"data-p2h-row='{_esc(json.dumps(list(bins[i])))}' data-p2h-col='{_esc(json.dumps(list(_labels(table.columns)[j])))}' "
+                f"data-bp-row='{_esc(json.dumps(list(bins[i])))}' data-bp-col='{_esc(json.dumps(list(_labels(table.columns)[j])))}' "
                 f"opacity='{0.55 if v < 0 else 0.9}' rx='1.5'><title>{_esc(tip)}</title></rect>"
             )
             if show_values and h > 0 and not stacked:

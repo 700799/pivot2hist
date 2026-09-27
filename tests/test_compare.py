@@ -5,13 +5,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import pivot2hist as p2h
-from pivot2hist import Comparison, Facets, agent
+import bts_pivot as bp
+from bts_pivot import Comparison, Facets, agent
 
 
 @pytest.fixture(scope="module")
 def v(fw):
-    return p2h.fit(fw, max_rows=12, max_cols=5)
+    return bp.fit(fw, max_rows=12, max_cols=5)
 
 
 @pytest.fixture
@@ -66,17 +66,17 @@ def test_two_views_other_is_laid_out_like_self(v):
 
 
 def test_two_frames_missing_column_is_a_clear_error(fw):
-    a = p2h.fit(fw, rows=["dst_port"], cols=["action"])
-    b = p2h.fit(fw.drop(columns=["action"]), rows=["dst_port"])
+    a = bp.fit(fw, rows=["dst_port"], cols=["action"])
+    b = bp.fit(fw.drop(columns=["action"]), rows=["dst_port"])
     with pytest.raises(KeyError, match="action"):
         a.compare(b)
-    ok = a.compare(p2h.fit(fw.sample(500, random_state=1), rows=["dst_port"]))
+    ok = a.compare(bp.fit(fw.sample(500, random_state=1), rows=["dst_port"]))
     assert ok.b.layout == ok.a.layout and [d.column for d in ok.layout.dims] == ["dst_port", "action"]
 
 
 def test_names_override_and_identical_names_disambiguated(v, fw):
     assert v.compare(action="deny", names=("blocked", "allowed")).names == ("blocked", "allowed")
-    same = p2h.fit(fw, rows=["dst_port"]).compare(p2h.fit(fw, rows=["dst_port"]))
+    same = bp.fit(fw, rows=["dst_port"]).compare(bp.fit(fw, rows=["dst_port"]))
     assert same.names == ("A", "B")
     s = v.slice(protocol="TCP")
     assert s.compare(s.clone()).names == ("A", "B")
@@ -101,11 +101,11 @@ def test_bad_forms_raise(v, bad):
 
 
 def test_metric_math_on_a_hand_built_case(tiny):
-    c = p2h.fit(tiny, rows=["x"], cols=[], agg="count").compare(g="a")
+    c = bp.fit(tiny, rows=["x"], cols=[], agg="count").compare(g="a")
     ta, tb = c.sides()
     assert set(ta.index) == {"p", "q"}
     assert ta["count"].loc[["p", "q"]].tolist() == [3.0, 1.0] and tb["count"].loc[["p", "q"]].tolist() == [2.0, 6.0]
-    got = {m: c.table(m)["count"].loc[["p", "q"]].round(4).tolist() for m in p2h.METRICS}
+    got = {m: c.table(m)["count"].loc[["p", "q"]].round(4).tolist() for m in bp.METRICS}
     assert got["delta"] == [1.0, -5.0]
     assert got["ratio"] == [1.5, 0.1667]
     assert got["pct_change"] == [50.0, -83.3333]
@@ -118,11 +118,11 @@ def test_metric_math_on_a_hand_built_case(tiny):
 
 def test_union_of_labels_fills_zero_for_counts_and_nan_for_means():
     df = pd.DataFrame({"g": ["a"] * 3 + ["b"] * 3, "x": ["only_a", "both", "both", "both", "only_b", "only_b"], "n": [1, 2, 3, 4, 5, 6]})
-    c = p2h.fit(df, rows=["x"], cols=[], agg="count").compare(g="a")
+    c = bp.fit(df, rows=["x"], cols=[], agg="count").compare(g="a")
     ta, tb = c.sides()
     assert set(ta.index) == {"only_a", "both", "only_b"} and list(ta.index) == list(tb.index)
     assert ta.loc["only_b", "count"] == 0 and tb.loc["only_a", "count"] == 0
-    cm = p2h.fit(df, rows=["x"], cols=[], values="n", agg="mean").compare(g="a")
+    cm = bp.fit(df, rows=["x"], cols=[], values="n", agg="mean").compare(g="a")
     ma, mb = cm.sides()
     assert np.isnan(ma.loc["only_b"].iloc[0]) and np.isnan(mb.loc["only_a"].iloc[0])
     assert cm.metric == "delta"
@@ -130,7 +130,7 @@ def test_union_of_labels_fills_zero_for_counts_and_nan_for_means():
 
 def test_new_and_gone_cells():
     df = pd.DataFrame({"g": ["a"] * 3 + ["b"] * 3, "x": ["only_a", "both", "both", "both", "only_b", "only_b"]})
-    c = p2h.fit(df, rows=["x"], cols=[], agg="count").compare(g="a").with_metric("ratio")
+    c = bp.fit(df, rows=["x"], cols=[], agg="count").compare(g="a").with_metric("ratio")
     t = c.table()["count"]
     assert np.isposinf(t["only_a"]) and t["only_b"] == 0
     text = c.render()
@@ -144,7 +144,7 @@ def test_new_and_gone_cells():
 
 
 def test_share_metrics_need_an_additive_measure(fw):
-    vm = p2h.fit(fw, rows=["dst_port"], cols=["action"], values="bytes", agg="mean", max_rows=12)
+    vm = bp.fit(fw, rows=["dst_port"], cols=["action"], values="bytes", agg="mean", max_rows=12)
     c = vm.compare(protocol="TCP")
     assert not c.additive and c.metric == "delta"
     for m in ("lift", "share_delta", "share_a", "share_b"):
@@ -157,13 +157,13 @@ def test_share_metrics_need_an_additive_measure(fw):
 def test_top_is_ranked_by_a_shrunk_log_ratio_and_lists_exact_values():
     # p: x30 built on 31 rows; q: x6 built on 70,000 rows -> q must rank first, exact values listed.
     df = pd.DataFrame({"g": ["a"] * 60_030 + ["b"] * 10_001, "x": ["p"] * 30 + ["q"] * 60_000 + ["p"] * 1 + ["q"] * 10_000})
-    c = p2h.fit(df, rows=["x"], cols=[], agg="count").compare(g="a").with_metric("ratio")
+    c = bp.fit(df, rows=["x"], cols=[], agg="count").compare(g="a").with_metric("ratio")
     top = c.top()
     assert list(top.columns) == ["row", "col", "g=a", "rest", "delta", "ratio", "lift", "p", "only_in"]
     assert top["row"].tolist() == ["q", "p"] and top["ratio"].tolist() == [6.0, 30.0]
     assert "×30" in c.render() and "×6" in c.render()  # displayed values stay exact
     df2 = pd.DataFrame({"g": ["a"] * 8 + ["b"] * 10_000, "x": ["p"] * 2 + ["q"] * 6 + ["p"] * 1 + ["q"] * 9_999})
-    c2 = p2h.fit(df2, rows=["x"], cols=[], agg="count").compare(g="a").with_metric("lift")
+    c2 = bp.fit(df2, rows=["x"], cols=[], agg="count").compare(g="a").with_metric("lift")
     t2 = c2.top()
     assert t2.iloc[0]["row"] == "p"  # the only cell over-represented in A; q is under-represented
     assert t2["lift"].round(2).tolist() == c2.table()["count"].round(2).loc[t2["row"]].tolist()
@@ -273,19 +273,19 @@ def test_to_dict_and_llm_context_are_json_safe(v):
 
 
 def test_top_level_functions_route_split_kwargs(fw):
-    c = p2h.compare(fw, action="deny", max_rows=10, max_cols=4)
+    c = bp.compare(fw, action="deny", max_rows=10, max_cols=4)
     assert isinstance(c, Comparison) and c.a.options.max_rows == 10
-    assert p2h.compare(fw, "action", "deny", "allow", rows=["dst_port"], metric="delta").metric == "delta"
-    f = p2h.facet(fw, "protocol", max_rows=10)
+    assert bp.compare(fw, "action", "deny", "allow", rows=["dst_port"], metric="delta").metric == "delta"
+    f = bp.facet(fw, "protocol", max_rows=10)
     assert isinstance(f, Facets) and f.column == "protocol"
 
 
 def test_paged_source_compare_matches_in_memory(fw, tmp_path):
     path = tmp_path / "fw.csv"
     fw.to_csv(path, index=False)
-    paged = p2h.fit(str(path), rows=["dst_port"], cols=["action"], agg="count", mode="paged", page_rows=700)
+    paged = bp.fit(str(path), rows=["dst_port"], cols=["action"], agg="count", mode="paged", page_rows=700)
     assert paged.paged is not None
-    mem = p2h.fit(fw, rows=["dst_port"], cols=["action"], agg="count")
+    mem = bp.fit(fw, rows=["dst_port"], cols=["action"], agg="count")
     cp, cm = paged.compare(protocol="TCP"), mem.compare(protocol="TCP")
     ta, tb = cp.sides()
     ma, mb = cm.sides()
@@ -357,7 +357,7 @@ def test_facets_compare_slice_toggle(v, fw):
     (lambda: pd.DataFrame({"a": ["x"] * 100, "b": range(100), "n": np.random.default_rng(0).normal(size=100)}), {"n": "> 0"}),
 ])
 def test_compare_and_facet_do_not_crash_on_adversarial_input(df_fn, split):
-    v = p2h.fit(df_fn())
+    v = bp.fit(df_fn())
     c = v.compare(**split)
     c.html()
     c.html(side_by_side=True)
@@ -365,7 +365,7 @@ def test_compare_and_facet_do_not_crash_on_adversarial_input(df_fn, split):
     c.top()
     json.dumps(c.to_dict())
     c.toggle().html()
-    for m in p2h.METRICS:
+    for m in bp.METRICS:
         try:
             c.with_metric(m).html()
         except ValueError as e:
@@ -382,18 +382,18 @@ def test_compare_and_facet_do_not_crash_on_adversarial_input(df_fn, split):
 
 
 def test_top_has_p_for_count_measures_only(fw):
-    c = p2h.compare(fw, action="deny", rows=["dst_port"], cols=["protocol"], agg="count")
+    c = bp.compare(fw, action="deny", rows=["dst_port"], cols=["protocol"], agg="count")
     t = c.top(5)
     assert "p" in t.columns and list(t.columns)[-2:] == ["p", "only_in"]
     assert ((t["p"] >= 0) & (t["p"] <= 1)).all()
     assert t["p"].min() < 0.05 / c.shape[0] / c.shape[1]  # the top mover survives Bonferroni
     assert c.is_count
-    s = p2h.compare(fw, action="deny", rows=["dst_port"], cols=["protocol"], values="bytes", agg="sum")
+    s = bp.compare(fw, action="deny", rows=["dst_port"], cols=["protocol"], values="bytes", agg="sum")
     assert "p" not in s.top(5).columns and not s.is_count
 
 
 def test_gtest_matches_hand_computation():
-    from pivot2hist._compare import _gtest_p
+    from bts_pivot._compare import _gtest_p
 
     a = np.array([[30.0, 70.0]])
     b = np.array([[10.0, 90.0]])
@@ -411,7 +411,7 @@ def test_gtest_matches_hand_computation():
 
 
 def test_drivers_name_columns_off_the_table(fw):
-    c = p2h.compare(fw, action="deny", rows=["dst_port"], cols=["protocol"], agg="count")
+    c = bp.compare(fw, action="deny", rows=["dst_port"], cols=["protocol"], agg="count")
     d = c.drivers()
     assert list(d.columns) == ["column", "kind", "value", "share_a", "share_b", "lift", "median_a", "median_b", "ratio", "score", "text"]
     assert not d.empty and len(d) <= 8
@@ -427,20 +427,20 @@ def test_drivers_name_columns_off_the_table(fw):
 
 def test_drivers_are_symmetric(fw):
     # a value that is common on side B but rare on side A is a driver too
-    c = p2h.compare(fw, action="deny", rows=["dst_port"], cols=["protocol"], agg="count")
+    c = bp.compare(fw, action="deny", rows=["dst_port"], cols=["protocol"], agg="count")
     d = c.drivers(20)
     assert (d["lift"].dropna() < 1).any() and (d["lift"].dropna() > 1).any()
 
 
 def test_drivers_skip_query_columns(fw):
-    v = p2h.fit(fw, rows=["dst_port"], cols=["action"], agg="count")
+    v = bp.fit(fw, rows=["dst_port"], cols=["action"], agg="count")
     c = v.compare("bytes > 5000 and duration < 2")
     assert c._split_columns() == ["bytes", "duration"]
     assert not (set(c.drivers()["column"]) & {"bytes", "duration"})
 
 
 def test_drivers_of_a_two_view_comparison(fw):
-    v = p2h.fit(fw, rows=["dst_port"], cols=["action"], agg="count")
+    v = bp.fit(fw, rows=["dst_port"], cols=["action"], agg="count")
     c = v.slice(country="US").compare(v.slice(country="CN"))
     assert c._split_columns() == ["country"]
     assert "country" not in set(c.drivers()["column"])
@@ -448,7 +448,7 @@ def test_drivers_of_a_two_view_comparison(fw):
 
 
 def test_to_dict_and_llm_context_carry_p_and_drivers(fw):
-    c = p2h.compare(fw, action="deny", rows=["dst_port"], cols=["protocol"], agg="count")
+    c = bp.compare(fw, action="deny", rows=["dst_port"], cols=["protocol"], agg="count")
     d = c.to_dict(3)
     assert "drivers" in d and d["drivers"] and {"column", "kind", "score", "text"} <= set(d["drivers"][0])
     assert all("p" in r for r in d["top"])

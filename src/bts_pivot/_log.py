@@ -3,11 +3,11 @@ and a report of what cost the most.
 
 ::
 
-    import pivot2hist as p2h
-    p2h.verbose()                 # print every major step to stderr as it happens
-    v = p2h.fit("big.parquet")    # survey -> plan -> pages -> fit -> pivot ...
-    p2h.stats(7)                  # the seven costliest steps (time, cpu, memory)
-    p2h.log.tail(12)              # the last twelve log lines
+    import bts_pivot as bp
+    bp.verbose()                 # print every major step to stderr as it happens
+    v = bp.fit("big.parquet")    # survey -> plan -> pages -> fit -> pivot ...
+    bp.stats(7)                  # the seven costliest steps (time, cpu, memory)
+    bp.log.tail(12)              # the last twelve log lines
 """
 from __future__ import annotations
 
@@ -163,7 +163,7 @@ class Log:
         return "\n".join(self.lines(20)) or "<Log: empty>"
 
 
-#: The module-wide log every pivot2hist step writes to.
+#: The module-wide log every bts-pivot step writes to.
 log = Log()
 
 

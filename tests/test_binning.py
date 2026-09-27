@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from pivot2hist import _binning as B
+from bts_pivot import _binning as B
 
 
 def test_nice_numbers():

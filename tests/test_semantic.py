@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from pivot2hist import _semantic as S
+from bts_pivot import _semantic as S
 
 
 @pytest.mark.parametrize(

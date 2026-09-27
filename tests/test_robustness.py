@@ -1,19 +1,19 @@
 """Safety net for unusual/bad input: things that used to crash with an opaque, low-level
-error now either work or fail with a clear, pivot2hist-level message. Each test here
+error now either work or fail with a clear, bts-pivot-level message. Each test here
 traces back to a bug found by adversarial probing, not a hypothetical.
 """
 import numpy as np
 import pandas as pd
 import pytest
 
-import pivot2hist as p2h
-from pivot2hist._fit import FitOptions
+import bts_pivot as bp
+from bts_pivot._fit import FitOptions
 
 
 def _round_trip(df, **kw):
     """profile -> fit -> pivot -> toggle -> bins -> render, the full pipeline."""
-    p2h.profile(df)
-    v = p2h.fit(df, **kw)
+    bp.profile(df)
+    v = bp.fit(df, **kw)
     v.pivot()
     v.toggle().bins()
     str(v)
@@ -37,7 +37,7 @@ def test_unhashable_dict_cells_do_not_crash():
 
 def test_unhashable_cells_nulls_stay_null_not_stringified():
     df = pd.DataFrame({"a": [[1, 2]] * 40 + [None] * 40 + [[3, 4]] * 20, "b": range(100)})
-    v = p2h.fit(df, rows=["a"], cols=None, values=None, agg=None)
+    v = bp.fit(df, rows=["a"], cols=None, values=None, agg=None)
     labels = [str(x) for x in v.pivot().index]
     assert "(null)" in labels
     assert "None" not in labels  # nulls must not get stringified into the literal "None"
@@ -46,15 +46,15 @@ def test_unhashable_cells_nulls_stay_null_not_stringified():
 def test_unhashable_values_column_gives_clear_error_not_a_crash():
     df = pd.DataFrame({"a": ["x", "y"] * 50, "b": [[1, 2]] * 100})
     with pytest.raises(ValueError, match="non-numeric"):
-        p2h.fit(df, rows=["a"], values="b", agg="sum").pivot()
+        bp.fit(df, rows=["a"], values="b", agg="sum").pivot()
 
 
 def test_unhashable_cells_via_duckdb_engine_fall_back_cleanly():
     duckdb = pytest.importorskip("duckdb")
     del duckdb
     df = pd.DataFrame({"a": [[1, 2]] * 50 + [[3, 4]] * 50, "b": range(100)})
-    v_pd = p2h.fit(df)
-    v_dd = p2h.fit(df, engine="duckdb")
+    v_pd = bp.fit(df)
+    v_dd = bp.fit(df, engine="duckdb")
     assert v_pd.pivot().to_numpy().tolist() == v_dd.pivot().sort_index().reindex(v_pd.pivot().index).to_numpy().tolist()
 
 
@@ -64,17 +64,17 @@ def test_unhashable_cells_via_duckdb_engine_fall_back_cleanly():
 @pytest.mark.parametrize("bad", [None, 12345, 3.14, True, b"bytes"])
 def test_load_rejects_non_tabular_scalars_clearly(bad):
     with pytest.raises(TypeError, match="tabular data"):
-        p2h.load(bad)
+        bp.load(bad)
 
 
 def test_fit_none_raises_clear_type_error():
     with pytest.raises(TypeError, match="tabular data"):
-        p2h.fit(None)
+        bp.fit(None)
 
 
 def test_agent_describe_bad_source_type_raises_clear_error():
     with pytest.raises(TypeError, match="tabular data"):
-        p2h.agent.describe(12345)
+        bp.agent.describe(12345)
 
 
 # --------------------------------------------------------------------------- degenerate FitOptions
@@ -91,8 +91,8 @@ def test_sample_negative_raises():
 
 
 def test_sample_one_still_works():
-    fw = p2h.sample.firewall_logs(300, seed=1)
-    v = p2h.fit(fw, sample=1)
+    fw = bp.sample.firewall_logs(300, seed=1)
+    v = bp.fit(fw, sample=1)
     v.pivot()
 
 
@@ -102,8 +102,8 @@ def test_sample_one_still_works():
     {"max_categories": 0}, {"id_ratio": -1}, {"max_sparsity": -1},
 ])
 def test_other_degenerate_options_degrade_gracefully(kw):
-    fw = p2h.sample.firewall_logs(300, seed=1)
-    v = p2h.fit(fw, **kw)
+    fw = bp.sample.firewall_logs(300, seed=1)
+    v = bp.fit(fw, **kw)
     v.pivot()  # must not raise; the exact layout chosen is not the point here
 
 
@@ -111,14 +111,14 @@ def test_other_degenerate_options_degrade_gracefully(kw):
 
 
 def test_fit_gmm_empty_array_raises_clear_error():
-    from pivot2hist import fit_gmm
+    from bts_pivot import fit_gmm
 
     with pytest.raises(ValueError, match="at least 1 data point"):
         fit_gmm(np.empty((0, 1)), 2)
 
 
 def test_choose_gmm_k_empty_array_does_not_crash():
-    from pivot2hist import choose_gmm_k
+    from bts_pivot import choose_gmm_k
 
     assert choose_gmm_k(np.empty((0, 1))) == 1
 
@@ -128,12 +128,12 @@ def test_choose_gmm_k_empty_array_does_not_crash():
 
 def test_empty_frame_raises_clear_error():
     with pytest.raises(ValueError, match="no columns"):
-        p2h.fit(pd.DataFrame())
+        bp.fit(pd.DataFrame())
 
 
 def test_zero_row_frame_raises_clear_error():
     with pytest.raises(ValueError, match="empty frame"):
-        p2h.fit(pd.DataFrame({"a": pd.Series(dtype=float), "b": pd.Series(dtype=object)}))
+        bp.fit(pd.DataFrame({"a": pd.Series(dtype=float), "b": pd.Series(dtype=object)}))
 
 
 def test_single_row_frame_does_not_crash():

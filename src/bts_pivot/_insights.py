@@ -5,7 +5,7 @@ every score is a plain numpy/pandas computation, cheap enough to re-run on every
 change (see ``View.insights()``'s ``sensitivity`` knob for how many findings surface).
 
 "mixle inspired": the modality check reuses the from-scratch Gaussian-mixture fitting in
-:mod:`pivot2hist._mixture` (BIC-selected component count) to notice a column with two or
+:mod:`bts_pivot._mixture` (BIC-selected component count) to notice a column with two or
 more distinct populations - the same automatic-model-selection idea :mod:`_density`
 already borrows for single-family fits, applied here to "how many groups is this,
 really?" instead of "what shape is this?".

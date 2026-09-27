@@ -17,7 +17,7 @@ seen after is checked against the history:
 Everything is counted, nothing is modelled: scores are in bits-like units (log2 of the
 rows behind the finding, plus log2 of how rare the value was among entities), so a
 finding on many rows about a rare value ranks first and the kinds rank against each
-other. Pairs with the spike detector (:mod:`pivot2hist._spikes`): spikes say what grew,
+other. Pairs with the spike detector (:mod:`bts_pivot._spikes`): spikes say what grew,
 novelty says what appeared.
 """
 from __future__ import annotations

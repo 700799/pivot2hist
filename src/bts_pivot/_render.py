@@ -166,7 +166,7 @@ def hist_html(table: pd.DataFrame, *, title: Optional[str] = None) -> str:
     values = table.to_numpy(dtype=float)
     finite = values[np.isfinite(values)]
     vmax = float(np.nanmax(np.abs(finite))) if finite.size else 0.0
-    out = ["<div class='pivot2hist'>"]
+    out = ["<div class='bts-pivot'>"]
     if title:
         out.append(f"<div style='font-family:monospace;margin-bottom:4px'>{title}</div>")
     out.append("<table style='border-collapse:collapse;font-family:monospace;font-size:12px'>")

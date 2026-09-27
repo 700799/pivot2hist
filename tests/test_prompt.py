@@ -1,12 +1,12 @@
 import pytest
 
-import pivot2hist as p2h
-from pivot2hist import DEFAULT_QUESTION, Prompt
+import bts_pivot as bp
+from bts_pivot import DEFAULT_QUESTION, Prompt
 
 
 @pytest.fixture(scope="module")
 def v(fw):
-    return p2h.fit(fw, max_rows=12, max_cols=5).slice(protocol="TCP")
+    return bp.fit(fw, max_rows=12, max_cols=5).slice(protocol="TCP")
 
 
 def _sections(p):
@@ -79,18 +79,18 @@ def test_comparison_prompt(v):
 
 
 def test_top_level_prompt_routes_fit_and_prompt_kwargs(fw):
-    p = p2h.prompt(fw, "q?", rows=["dst_port"], cols=["action"], max_rows=6, table_max_rows=4, anomalies=False, insights=False, spikes=False)
+    p = bp.prompt(fw, "q?", rows=["dst_port"], cols=["action"], max_rows=6, table_max_rows=4, anomalies=False, insights=False, spikes=False)
     assert _sections(p) == ["## Dataset", "## Current view", "## Your task"] and p.rstrip().endswith("q?")
     assert "by dst_port (top 5) x action" in p and "truncated to 4" in p
-    assert "## Comparison" in p2h.prompt(fw, compare={"action": "deny"}, anomalies=False)
+    assert "## Comparison" in bp.prompt(fw, compare={"action": "deny"}, anomalies=False)
 
 
 def test_prompt_on_histogram_and_paged_source(fw, tmp_path):
-    h = p2h.fit(fw).histogram("bytes")
+    h = bp.fit(fw).histogram("bytes")
     ph = h.prompt(anomalies=False)
     assert "Histogram of" in ph and "| bytes (bins)" in ph
     path = tmp_path / "fw.csv"
     fw.to_csv(path, index=False)
-    paged = p2h.fit(str(path), rows=["dst_port"], cols=["action"], agg="count", mode="paged", page_rows=700)
+    paged = bp.fit(str(path), rows=["dst_port"], cols=["action"], agg="count", mode="paged", page_rows=700)
     pp = paged.prompt(anomalies=False)
     assert "aggregated page by page" in pp and "## Current view" in pp

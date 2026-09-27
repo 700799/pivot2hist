@@ -22,7 +22,7 @@ from ._fit import _materialize_table
 
 @dataclass(frozen=True)
 class Trend:
-    """Per-row trend series (rows x time buckets) with what :func:`pivot2hist.spikes`
+    """Per-row trend series (rows x time buckets) with what :func:`bts_pivot.spikes`
     needs on top of the sparkline itself: ``counts`` (rows behind each cell, same shape as
     ``table``), the bucket ``starts`` (one timestamp per label) and the ``freq`` they were
     cut at."""

@@ -8,7 +8,7 @@ and this process's footprint. The :class:`Plan` it produces is one of
 ``downcast``  load everything, shrink dtypes (categories, smaller ints);
 ``paged``     never hold the whole thing: fit on a sample, aggregate page by page.
 
-:class:`PagedSource` is what the paged plan hands to :class:`~pivot2hist.View`.
+:class:`PagedSource` is what the paged plan hands to :class:`~bts_pivot.View`.
 """
 from __future__ import annotations
 

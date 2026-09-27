@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import pivot2hist as p2h
+import bts_pivot as bp
 
 rng = np.random.default_rng(42)
 N = 600
@@ -47,7 +47,7 @@ SCENARIOS = {
     "long_strings": lambda: pd.DataFrame({"msg": rng.choice(["x" * 300, "y" * 250, "z" * 200], N), "k": rng.choice(list("ab"), N)}),
     "cyber_dns": lambda: pd.DataFrame({"ts": _dates(freq="2s"), "client": rng.choice([f"192.168.1.{i}" for i in range(1, 60)], N), "qname": rng.choice(["www.example.com", "api.corp.local", "cdn.evil.biz", "mail.google.co.uk"], N), "qtype": rng.choice(["A", "AAAA", "TXT"], N), "rcode": rng.choice([0, 3], N, p=[0.9, 0.1]), "url": rng.choice(["https://a.com/x", "https://b.org/y/z", "http://c.net/"], N), "user": rng.choice([f"u{i}@corp.local" for i in range(8)], N)}),
     "high_cardinality_text": lambda: pd.DataFrame({"path": [f"/var/app/{i % 700}/{i}" for i in range(N)], "k": rng.choice(list("abc"), N)}),
-    "records_missing_keys": lambda: p2h.load([{"a": 1, "b": "x"}, {"a": 2}, {"b": "y", "c": 3.0}] * (N // 3)),
+    "records_missing_keys": lambda: bp.load([{"a": 1, "b": "x"}, {"a": 2}, {"b": "y", "c": 3.0}] * (N // 3)),
     "wide_short": lambda: pd.DataFrame({f"c{i}": rng.choice(list("ab"), 50) for i in range(150)}),
     "inf_values": lambda: pd.DataFrame({"v": np.where(rng.random(N) < 0.05, np.inf, rng.normal(size=N)), "k": rng.choice(list("ab"), N)}),
     "big_ints": lambda: pd.DataFrame({"big": rng.integers(10**15, 10**18, N), "k": rng.choice(list("abc"), N)}),
@@ -68,7 +68,7 @@ def _xml(s: str) -> None:
 def test_scenario(name):
     df = SCENARIOS[name]()
     box = (12, 5)
-    v = p2h.fit(df, max_rows=box[0], max_cols=box[1])
+    v = bp.fit(df, max_rows=box[0], max_cols=box[1])
     t = v.pivot()
     assert t.shape[0] <= box[0] and t.shape[1] <= box[1], (name, t.shape, v.layout)
     assert t.shape[0] >= 1
@@ -101,7 +101,7 @@ def test_scenario(name):
 @pytest.mark.parametrize("name", ["cyber_dns", "ports_and_ips", "regular_time_series", "heavy_tail", "all_numeric"])
 def test_scenario_extras(name):
     df = SCENARIOS[name]()
-    v = p2h.fit(df, max_rows=12, max_cols=5)
+    v = bp.fit(df, max_rows=12, max_cols=5)
     if v.pivot().shape[0] >= 3:
         c = v.cluster(2)
         assert c.pivot().shape[0] <= 12 and c.layout.rows[0].column == "cluster"
@@ -118,18 +118,18 @@ def test_scenario_extras(name):
 
 
 def test_scenario_registry_covers_semantic_and_time_series():
-    dns = p2h.profile(SCENARIOS["cyber_dns"]())
+    dns = bp.profile(SCENARIOS["cyber_dns"]())
     assert dns["client"].semantic == "ipv4" and dns["url"].semantic == "url"
     assert dns["user"].semantic == "email" and dns["qname"].semantic == "domain"
     assert dns.is_time_series
-    assert p2h.profile(SCENARIOS["regular_time_series"]()).is_time_series
-    assert not p2h.profile(SCENARIOS["irregular_event_log"]()).is_time_series
-    assert p2h.profile(SCENARIOS["ports_and_ips"]())["dst_port"].semantic == "port"
+    assert bp.profile(SCENARIOS["regular_time_series"]()).is_time_series
+    assert not bp.profile(SCENARIOS["irregular_event_log"]()).is_time_series
+    assert bp.profile(SCENARIOS["ports_and_ips"]())["dst_port"].semantic == "port"
 
 
 def test_large_frame_end_to_end():
-    df = p2h.sample.firewall_logs(150_000, seed=9)
-    v = p2h.fit(df)
+    df = bp.sample.firewall_logs(150_000, seed=9)
+    v = bp.fit(df)
     assert v.pivot().shape[0] <= 40
     assert v.toggle().bins().shape[0] <= 40
     assert v.slice(action="deny").histogram("bytes").bins()["count"].sum() == (df["action"] == "deny").sum()

@@ -2,8 +2,8 @@ import xml.dom.minidom
 
 import pandas as pd
 
-import pivot2hist as p2h
-from pivot2hist._html import heat_color, hist_svg, pivot_html
+import bts_pivot as bp
+from bts_pivot._html import heat_color, hist_svg, pivot_html
 
 
 def _xml(s: str) -> None:
@@ -11,7 +11,7 @@ def _xml(s: str) -> None:
 
 
 def test_pivot_html_structure(fw):
-    v = p2h.fit(fw, max_rows=8, max_cols=4)
+    v = bp.fit(fw, max_rows=8, max_cols=4)
     h = pivot_html(v.pivot(), title=v.title(), totals=True, bars=True)
     _xml(h)
     assert "total" in h and "background:rgb(" in h and "<title" not in h
@@ -22,20 +22,20 @@ def test_pivot_html_structure(fw):
 
 def test_pivot_html_multiindex_and_escaping():
     df = pd.DataFrame({"a": ["<b>", "<b>", "y"], "b": ["s&t", "u", "u"], "n": [1, 2, 3]})
-    v = p2h.fit(df, rows=["a", "b"], cols=[], agg="count")
+    v = bp.fit(df, rows=["a", "b"], cols=[], agg="count")
     h = pivot_html(v.pivot())
     _xml(h)
     assert "&lt;b&gt;" in h and "s&amp;t" in h
-    m = p2h.fit(p2h.sample.firewall_logs(500), rows=["severity", "action"], cols=["protocol", "action"], agg="count")
+    m = bp.fit(bp.sample.firewall_logs(500), rows=["severity", "action"], cols=["protocol", "action"], agg="count")
     h2 = pivot_html(m.pivot(), heat="column")
     _xml(h2)
     assert "colspan=" in h2
 
 
 def test_pivot_html_empty_and_max_rows(fw):
-    v = p2h.fit(fw).slice(action="nope")
+    v = bp.fit(fw).slice(action="nope")
     assert "(empty)" in pivot_html(v.pivot())
-    h = pivot_html(p2h.fit(fw).pivot(), max_rows=3)
+    h = pivot_html(bp.fit(fw).pivot(), max_rows=3)
     assert "more rows" in h
 
 
@@ -47,23 +47,23 @@ def test_heat_color_range():
 
 
 def test_hist_svg_variants(fw):
-    v = p2h.fit(fw, max_rows=8, max_cols=4)
+    v = bp.fit(fw, max_rows=8, max_cols=4)
     s = hist_svg(v.toggle().bins(), title="t")
     _xml(s[s.index("<svg"):s.index("</svg>") + 6])
     assert s.count("<rect") >= 8 and "<title>" in s
     stacked = hist_svg(v.toggle().bins(), stacked=True, log_y=True)
     _xml(stacked[stacked.index("<svg"):stacked.index("</svg>") + 6])
-    nested = p2h.fit(fw, rows=["severity", "action"], cols=["protocol"], agg="count").toggle()
+    nested = bp.fit(fw, rows=["severity", "action"], cols=["protocol"], agg="count").toggle()
     s3 = hist_svg(nested.bins())
     assert "stroke='#999'" in s3  # group brackets
     hb = v.histogram("bytes")
-    s4 = hist_svg(hb.bins(), density=p2h._binning.kde(fw["bytes"], log=True))
+    s4 = hist_svg(hb.bins(), density=bp._binning.kde(fw["bytes"], log=True))
     assert "polyline" in s4
     assert "(empty)" in hist_svg(pd.DataFrame())
 
 
 def test_view_html_and_svg(fw):
-    v = p2h.fit(fw, max_rows=8, max_cols=4)
+    v = bp.fit(fw, max_rows=8, max_cols=4)
     assert "<table" in v.html() and "<table" in v._repr_html_()
     assert "<svg" in v.svg() and "<svg" in v.toggle().html()
     styled = v.style(totals=True, heat="row", bars=True, compact=True)
@@ -75,15 +75,15 @@ def test_view_html_and_svg(fw):
 
 
 def test_theme_default_is_byte_identical_to_light():
-    df = p2h.sample.firewall_logs(300)
-    v = p2h.fit(df, max_rows=8, max_cols=4)
+    df = bp.sample.firewall_logs(300)
+    v = bp.fit(df, max_rows=8, max_cols=4)
     assert pivot_html(v.pivot()) == pivot_html(v.pivot(), theme="light")
     h = v.toggle()
     assert hist_svg(h.bins()) == hist_svg(h.bins(), theme="light")
 
 
 def test_graphite_theme_produces_dark_output(fw):
-    v = p2h.fit(fw, max_rows=8, max_cols=4)
+    v = bp.fit(fw, max_rows=8, max_cols=4)
     light = pivot_html(v.pivot())
     dark = pivot_html(v.pivot(), theme="graphite")
     _xml(dark)
@@ -100,11 +100,11 @@ def test_unknown_theme_raises():
     with _pytest.raises(ValueError):
         heat_color(0.5, theme="neon")
     with _pytest.raises(ValueError):
-        pivot_html(p2h.fit(p2h.sample.firewall_logs(50)).pivot(), theme="neon")
+        pivot_html(bp.fit(bp.sample.firewall_logs(50)).pivot(), theme="neon")
 
 
 def test_subtotals_and_outline(fw):
-    v = p2h.fit(fw, rows=["severity", "action"], cols=["protocol"], agg="count", max_rows=15)
+    v = bp.fit(fw, rows=["severity", "action"], cols=["protocol"], agg="count", max_rows=15)
     plain = pivot_html(v.pivot(), agg="count")
     sub = pivot_html(v.pivot(), subtotals=True, totals=True, agg="count")
     _xml(sub)
@@ -113,19 +113,19 @@ def test_subtotals_and_outline(fw):
     out = pivot_html(v.pivot(), outline=True, totals=True, agg="count")
     _xml(out)
     assert out.count("<details") == v.pivot().index.get_level_values(0).nunique()
-    assert "p2h-outline" in out
+    assert "bp-outline" in out
     # subtotal values actually sum the group (agg=count -> sum; agg=mean -> mean)
-    m = p2h.fit(fw, rows=["severity", "action"], cols=["protocol"], values="bytes", agg="mean")
+    m = bp.fit(fw, rows=["severity", "action"], cols=["protocol"], values="bytes", agg="mean")
     msub = pivot_html(m.pivot(), subtotals=True, agg="mean")
     assert "∑" in msub
     # single-level rows: subtotals/outline are no-ops, never crash
-    flat = p2h.fit(fw, rows=["action"], cols=["protocol"], agg="count")
+    flat = bp.fit(fw, rows=["action"], cols=["protocol"], agg="count")
     assert pivot_html(flat.pivot(), subtotals=True, agg="count") == pivot_html(flat.pivot(), agg="count")
     assert pivot_html(flat.pivot(), outline=True, agg="count") == pivot_html(flat.pivot(), agg="count")
 
 
 def test_view_style_theme_subtotals_outline(fw):
-    v = p2h.fit(fw, rows=["severity", "action"], cols=["protocol"], agg="count", max_rows=15)
+    v = bp.fit(fw, rows=["severity", "action"], cols=["protocol"], agg="count", max_rows=15)
     assert v.style(theme="graphite").html() != v.html()
     assert "∑" in v.style(subtotals=True, totals=True).html()
     assert "<details" in v.style(outline=True).html()
@@ -133,12 +133,12 @@ def test_view_style_theme_subtotals_outline(fw):
 
 
 def test_gunmetal_theme_renders_everywhere(fw):
-    from pivot2hist._html import PALETTES, THEMES, PALETTE_GUNMETAL
+    from bts_pivot._html import PALETTES, THEMES, PALETTE_GUNMETAL
 
     assert THEMES == ("light", "graphite", "gunmetal") and set(PALETTES["gunmetal"]) == set(PALETTES["graphite"])
-    v = p2h.fit(fw, max_rows=8, max_cols=4)
+    v = bp.fit(fw, max_rows=8, max_cols=4)
     gun = pivot_html(v.pivot(), theme="gunmetal")
-    assert "#1f262d" in gun and "data-p2h-theme='gunmetal'" in gun and gun != pivot_html(v.pivot(), theme="graphite")
+    assert "#1f262d" in gun and "data-bp-theme='gunmetal'" in gun and gun != pivot_html(v.pivot(), theme="graphite")
     svg = hist_svg(v.toggle().bins(), theme="gunmetal")
     assert "#1f262d" in svg and PALETTE_GUNMETAL[0] in svg
     assert "#1f262d" in v.slice(action="deny").style(theme="gunmetal").html()

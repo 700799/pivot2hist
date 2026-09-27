@@ -2,7 +2,7 @@
 and by how much against their *own* history.
 
 A sparkline shows the shape; this scores it. Each row of the current table gets a time
-series of the view's measure (the same buckets :func:`pivot2hist.sparkline_table` draws)
+series of the view's measure (the same buckets :func:`bts_pivot.sparkline_table` draws)
 and every bucket is compared with a baseline built from that row's other buckets. The
 baseline is robust - a median, with the spread measured by the median absolute deviation
 (MAD) - so the spike itself doesn't inflate the yardstick it is judged by, and it is

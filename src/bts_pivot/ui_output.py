@@ -1,7 +1,7 @@
 """The explorer's output pane: the rendered heatmap / histogram, with clickable cells.
 
 :class:`ClickableHTML` is an ``anywidget`` that shows the HTML the explorer renders and
-reports which cell (``data-p2h-row`` / ``data-p2h-col`` attributes on heatmap cells and
+reports which cell (``data-bp-row`` / ``data-bp-col`` attributes on heatmap cells and
 histogram bars) was clicked through its ``clicked`` trait. Without ``anywidget`` the pane
 is a plain ``ipywidgets.HTML`` (same ``value`` interface, no clicks); the Inspect tab's
 row/column pickers cover that case.
@@ -17,9 +17,9 @@ _ESM = """
 function render({ model, el }) {
   const style = document.createElement("style");
   style.textContent =
-    "[data-p2h-row]{cursor:pointer}" +
-    "td[data-p2h-row]:hover{outline:2px solid #4a7ebb;outline-offset:-2px}" +
-    "rect[data-p2h-row]:hover{stroke:#222;stroke-width:1.5}";
+    "[data-bp-row]{cursor:pointer}" +
+    "td[data-bp-row]:hover{outline:2px solid #4a7ebb;outline-offset:-2px}" +
+    "rect[data-bp-row]:hover{stroke:#222;stroke-width:1.5}";
   el.appendChild(style);
   const box = document.createElement("div");
   el.appendChild(box);
@@ -28,17 +28,17 @@ function render({ model, el }) {
   model.on("change:value", draw);
   box.addEventListener("click", (ev) => {
     const prev = model.get("clicked") || {};
-    const s = ev.target.closest("[data-p2h-slice]");
+    const s = ev.target.closest("[data-bp-slice]");
     if (s) {
-      model.set("clicked", { slice: s.dataset.p2hSlice, n: (prev.n || 0) + 1 });
+      model.set("clicked", { slice: s.dataset.bpSlice, n: (prev.n || 0) + 1 });
       model.save_changes();
       return;
     }
-    const t = ev.target.closest("[data-p2h-row]");
+    const t = ev.target.closest("[data-bp-row]");
     if (!t) return;
     model.set("clicked", {
-      row: JSON.parse(t.dataset.p2hRow),
-      col: JSON.parse(t.dataset.p2hCol),
+      row: JSON.parse(t.dataset.bpRow),
+      col: JSON.parse(t.dataset.bpCol),
       n: (prev.n || 0) + 1,
     });
     model.save_changes();

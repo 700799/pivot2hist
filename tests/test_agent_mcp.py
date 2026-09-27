@@ -2,8 +2,8 @@ import json
 
 import pytest
 
-import pivot2hist as p2h
-from pivot2hist import agent
+import bts_pivot as bp
+from bts_pivot import agent
 
 
 def _assert_json_safe(obj):
@@ -11,10 +11,10 @@ def _assert_json_safe(obj):
 
 
 def test_columns_kwarg_honored_for_frames(fw):
-    v = p2h.fit(fw, columns=["action", "bytes", "dst_port"], agg="count")
+    v = bp.fit(fw, columns=["action", "bytes", "dst_port"], agg="count")
     assert sorted(v.data.columns) == ["action", "bytes", "dst_port"]
     with pytest.raises(KeyError):
-        p2h.fit(fw, columns=["nope"])
+        bp.fit(fw, columns=["nope"])
 
 
 def test_agent_describe(fw):
@@ -118,7 +118,7 @@ mcp = pytest.importorskip("mcp")
 
 @pytest.fixture(scope="module")
 def mcp_server_module():
-    from pivot2hist import mcp_server
+    from bts_pivot import mcp_server
 
     return mcp_server
 
@@ -218,7 +218,7 @@ def test_agent_describe_distributions(fw):
     _assert_json_safe(d)
     bytes_col = next(c for c in d["columns"] if c["name"] == "bytes")
     assert bytes_col["distribution"] is not None
-    assert bytes_col["distribution"]["family"] in p2h.DIST_FAMILIES
+    assert bytes_col["distribution"]["family"] in bp.DIST_FAMILIES
     assert isinstance(bytes_col["distribution"]["params"], dict)
     non_numeric = next(c for c in d["columns"] if c["name"] == "action")
     assert "distribution" not in non_numeric
@@ -261,7 +261,7 @@ def test_mcp_anomalies_and_distributions_tools(mcp_server_module, tmp_path, fw):
     assert len(d1["cells"]) == 3
     d2 = json.loads(r2.content[0].text)
     bytes_col = next(c for c in d2["columns"] if c["name"] == "bytes")
-    assert bytes_col["distribution"]["family"] in p2h.DIST_FAMILIES
+    assert bytes_col["distribution"]["family"] in bp.DIST_FAMILIES
 
 
 def test_agent_compare_split_vs_rest(fw):
@@ -359,7 +359,7 @@ def test_agent_prompt(fw):
     )
     assert "## Comparison" in full["prompt"] and "## Cell in focus" in full["prompt"] and "Sliced to: protocol=TCP" in full["prompt"]
     assert "under metric 'delta'" in full["prompt"]
-    from pivot2hist import DEFAULT_QUESTION
+    from bts_pivot import DEFAULT_QUESTION
 
     assert full["question"] == DEFAULT_QUESTION
 

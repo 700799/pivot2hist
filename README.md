@@ -1,4 +1,4 @@
-# pivot2hist
+# bts-pivot
 
 Auto-fitted pivot tables that toggle to histograms and back, with slicing, clustering,
 a draggable field list, a dark modern theme, an MCP server for LLM agents and Jupyter
@@ -6,17 +6,17 @@ menus. Built for cyber logs (firewall, auth, DNS, EDR ...) but the type guessing
 generic, so it works on any tabular data.
 
 ```
-pip install pivot2hist                       # pandas + numpy only
-pip install "pivot2hist[jupyter]"            # + ipywidgets/anywidget for the interactive explorer
-pip install "pivot2hist[parquet,duckdb]"     # + pyarrow / duckdb sources (surveyed, paged, engine="duckdb")
-pip install "pivot2hist[cluster]"            # + scikit-learn for real HDBSCAN
-pip install "pivot2hist[mcp]"                # + an MCP server for LLM agents
+pip install bts-pivot                       # pandas + numpy only
+pip install "bts-pivot[jupyter]"            # + ipywidgets/anywidget for the interactive explorer
+pip install "bts-pivot[parquet,duckdb]"     # + pyarrow / duckdb sources (surveyed, paged, engine="duckdb")
+pip install "bts-pivot[cluster]"            # + scikit-learn for real HDBSCAN
+pip install "bts-pivot[mcp]"                # + an MCP server for LLM agents
 ```
 
 ```python
-import pivot2hist as p2h
+import bts_pivot as bp
 
-v = p2h.fit("firewall.csv")        # a DataFrame, path, list of dicts ... anything tabular
+v = bp.fit("firewall.csv")        # a DataFrame, path, list of dicts ... anything tabular
 v                                  # notebook: heatmap pivot, best fit for a 40 x 12 box
 v.toggle()                         # the same table as an SVG histogram; toggle() again returns
 v.slice(action="deny")             # slices stack, show in the title and survive toggling
@@ -25,12 +25,12 @@ v.suggest()                        # the auto-guess menu: alternative layouts, s
 v.cluster(4)                       # group similar rows with k-means
 v.coarser("src_ip")                # 10.0.1.5 -> 10.0.1.0/24 -> 10.0.0.0/16
 v.anomalies()                      # cells that break the row/column independence pattern
-p2h.explore(df)                    # Jupyter menus: drag fields, pick a theme, all of the above
-p2h.fit("huge.parquet")            # surveyed against your RAM; fitted on a sample, aggregated page by page
-p2h.chains(df, "event", by="user", time="timestamp")   # Markov transition matrix as a pivot
-p2h.regimes(df, "event", by="user", time="timestamp")  # HMM-decoded behavioural regimes, as a pivot
-p2h.dependencies(df)               # which columns move together, as a pivot (mutual information)
-p2h.verbose(); p2h.stats(7)        # scrolling step log; the seven costliest steps
+bp.explore(df)                    # Jupyter menus: drag fields, pick a theme, all of the above
+bp.fit("huge.parquet")            # surveyed against your RAM; fitted on a sample, aggregated page by page
+bp.chains(df, "event", by="user", time="timestamp")   # Markov transition matrix as a pivot
+bp.regimes(df, "event", by="user", time="timestamp")  # HMM-decoded behavioural regimes, as a pivot
+bp.dependencies(df)               # which columns move together, as a pivot (mutual information)
+bp.verbose(); bp.stats(7)        # scrolling step log; the seven costliest steps
 v.llm_context()                    # description + metadata + a markdown table, sized for a model's context
 v.insights()                       # rich local summary: distributions, mixtures, anomalies, ranked findings — no LLM
 v.compare(action="deny")           # deny vs the rest on one shared layout: diverging heatmap, .top() movers, toggles too
@@ -42,12 +42,12 @@ v.spikes("timestamp")              # what changed and when: per-row spikes, drop
 v.novel("src_ip", "dst_port")      # what appeared: new sources, never-seen pairs and values, fan-out jumps
 v.compare(action="deny").drivers() # beyond the table: what else differs between the sides (and .top() carries a p-value)
 v.prompt("What's unusual here?")   # everything on screen as one paste-anywhere LLM prompt (no model is called)
-p2h.agent.pivot("firewall.csv", rows=["src_ip"], filters=[{"column": "action", "eq": "deny"}])  # plain JSON, for LLM agents
+bp.agent.pivot("firewall.csv", rows=["src_ip"], filters=[{"column": "action", "eq": "deny"}])  # plain JSON, for LLM agents
 ```
 
-Shell: `pivot2hist firewall.csv --slice action=deny --hist --on bytes --by dst_port`,
-`pivot2hist --demo firewall`. MCP server for any MCP client (Claude Code, Claude Desktop,
-...): `pivot2hist-mcp`.
+Shell: `bts-pivot firewall.csv --slice action=deny --hist --on bytes --by dst_port`,
+`bts-pivot --demo firewall`. MCP server for any MCP client (Claude Code, Claude Desktop,
+...): `bts-pivot-mcp`.
 
 ## How it works
 
@@ -58,22 +58,22 @@ the CLI) funnels through the same five steps; a `View` is immutable, so `.slice(
 ```
   entry points
   ------------
-  p2h.fit / histogram / chains / regimes / dependencies(df, ...)
-  p2h.explore(df)      -> Explorer (ipywidgets: drag fields, live re-fit)
-  p2h.agent.*          -> plain JSON, for LLM tool-calling
-  pivot2hist-mcp       -> MCP server, same operations over stdio
-  CLI: pivot2hist FILE [--hist] [--slice ...] [--chains ...]
+  bp.fit / histogram / chains / regimes / dependencies(df, ...)
+  bp.explore(df)      -> Explorer (ipywidgets: drag fields, live re-fit)
+  bp.agent.*          -> plain JSON, for LLM tool-calling
+  bts-pivot-mcp       -> MCP server, same operations over stdio
+  CLI: bts-pivot FILE [--hist] [--slice ...] [--chains ...]
               |
               v
   +------------------------------------------------------------------+
-  | 1. LOAD / SURVEY        p2h.load()  or  p2h.survey() + plan      |
+  | 1. LOAD / SURVEY        bp.load()  or  bp.survey() + plan      |
   |    fits the memory budget?  --yes-->  load fully, or downcast    |
   |    too big?                 --no -->  sample + page (see below)  |
   +------------------------------------------------------------------+
               |
               v
   +------------------------------------------------------------------+
-  | 2. PROFILE              p2h.profile(df)                          |
+  | 2. PROFILE              bp.profile(df)                          |
   |    kind (numeric/categorical/datetime/boolean/id/constant)       |
   |    + semantic type (ipv4, port, url, email, domain, path, ...)   |
   +------------------------------------------------------------------+
@@ -134,15 +134,15 @@ same `View` rather than being a separate pipeline:
         +-- .anomalies()              --> row/col independence residuals (surprise)
         +-- .distribution(col)        --> best-fit probability family, by BIC
         +-- .modes(col)               --> Gaussian-mixture peaks (component count by BIC)
-        +-- p2h.regimes(state, ...)   --> HMM-decoded regime column, itself a View
-        +-- p2h.dependencies(df)      --> pairwise column mutual-information, a View
+        +-- bp.regimes(state, ...)   --> HMM-decoded regime column, itself a View
+        +-- bp.dependencies(df)      --> pairwise column mutual-information, a View
         +-- .cluster() / .cocluster() --> row / row+col groups
                                           (k-means, DBSCAN, HDBSCAN, GMM, spectral, MCL)
 ```
 
 ## Type guessing
 
-`p2h.profile(df)` classifies every column before anything is fitted:
+`bp.profile(df)` classifies every column before anything is fitted:
 
 | kind | examples | used as |
 | --- | --- | --- |
@@ -173,7 +173,7 @@ Time series are detected too: a datetime column sampled at a mostly regular inte
 the frame as a time series (`profile.is_time_series`, `ts_freq`), which makes the fit prefer
 time down the side and `mean(<reading>)` as the measure.
 
-The loader (`p2h.load`) also turns numeric strings (`"1,024"`), yes/no strings and epoch
+The loader (`bp.load`) also turns numeric strings (`"1,024"`), yes/no strings and epoch
 integers into proper types, keeps zip-code-like strings as text, makes a `DatetimeIndex`
 a column, and never copies a frame unless a column actually changes.
 
@@ -195,19 +195,19 @@ a column, and never copies a frame unless a column actually changes.
    down the side; small categories across the top).
 
 ```python
-p2h.fit(df, max_rows=20, max_cols=6, layers=1, aspect=4)
-p2h.fit(df, rows=["src_ip"], cols=["action"])                 # fix axes, auto-pick the rest
-p2h.fit(df, rows=[{"column": "src_ip", "level": "/24"}], cols=[{"column": "timestamp", "freq": "hour_of_day"}])
-p2h.fit(df, rows=[{"column": "bytes", "bins": 6}, "action"], agg="count")
-p2h.fit(df, pin=["country"])                                  # must appear somewhere
-p2h.fit(df, prefer_rows=["timestamp"], prefer_cols=["action"])
-p2h.fit(df, weights={"layers": 2.0, "mutual_info": 4.0})      # re-weight the score
-p2h.fit(df, bins="kmeans")                                    # density-driven natural breaks
-p2h.fit(df, objective="bic")                                  # BIC scoring, see below
-p2h.suggest(df, 5)                                            # ranked alternatives
+bp.fit(df, max_rows=20, max_cols=6, layers=1, aspect=4)
+bp.fit(df, rows=["src_ip"], cols=["action"])                 # fix axes, auto-pick the rest
+bp.fit(df, rows=[{"column": "src_ip", "level": "/24"}], cols=[{"column": "timestamp", "freq": "hour_of_day"}])
+bp.fit(df, rows=[{"column": "bytes", "bins": 6}, "action"], agg="count")
+bp.fit(df, pin=["country"])                                  # must appear somewhere
+bp.fit(df, prefer_rows=["timestamp"], prefer_cols=["action"])
+bp.fit(df, weights={"layers": 2.0, "mutual_info": 4.0})      # re-weight the score
+bp.fit(df, bins="kmeans")                                    # density-driven natural breaks
+bp.fit(df, objective="bic")                                  # BIC scoring, see below
+bp.suggest(df, 5)                                            # ranked alternatives
 ```
 
-Every scoring term and its default weight is in `p2h.DEFAULT_WEIGHTS`.
+Every scoring term and its default weight is in `bp.DEFAULT_WEIGHTS`.
 
 **Objective**: `objective="bic"` swaps the raw mutual-information term for a proper
 model-selection question - is this layout's row/column association strong enough to be
@@ -220,7 +220,7 @@ parsimonious layouts on smaller samples and gets more permissive as evidence acc
 Every other scoring term (sparsity, aspect, layers, priors ...) is unchanged; the default
 stays `"heuristic"`.
 
-Example (`p2h.sample.firewall_logs()`, `max_rows=8, max_cols=5`, text rendering):
+Example (`bp.sample.firewall_logs()`, `max_rows=8, max_cols=5`, text rendering):
 
 ```
 pivot · sum(bytes) by dst_port (top 7) x severity · 5,000 rows
@@ -365,7 +365,7 @@ v.cluster(4)                                  # k-means on the pivot rows' colum
                                               #   similar rows grouped under a cluster level
 v.cluster(4, collapse=True)                   # ... or collapsed into 4 rows
 v.cluster(on=["bytes", "duration"])           # k-means on records, auto k by silhouette
-p2h.cluster(df, ["bytes", "duration"], k=3)   # just the frame with a cluster column
+bp.cluster(df, ["bytes", "duration"], k=3)   # just the frame with a cluster column
 ```
 
 Clustering is numpy k-means++ with an automatic k (centroid silhouette); no scikit-learn
@@ -387,11 +387,11 @@ follows from the memory budget (default: half the available RAM):
 | choke | `paged` | fit on a sample (spread across Parquet row groups / a DuckDB reservoir sample); aggregate page by page |
 
 ```python
-p2h.survey("events.parquet")                       # the report, no loading
-p2h.fit("events.parquet")                          # auto plan
-p2h.fit("events.csv", memory_budget_mb=2000)       # your budget
-p2h.fit("events.parquet", mode="paged", page_rows=500_000, columns=["ts", "src_ip", "action", "bytes"])
-p2h.fit("duckdb://logs.duckdb?table=events")       # or a connection: p2h.fit(con, query="SELECT ...")
+bp.survey("events.parquet")                       # the report, no loading
+bp.fit("events.parquet")                          # auto plan
+bp.fit("events.csv", memory_budget_mb=2000)       # your budget
+bp.fit("events.parquet", mode="paged", page_rows=500_000, columns=["ts", "src_ip", "action", "bytes"])
+bp.fit("duckdb://logs.duckdb?table=events")       # or a connection: bp.fit(con, query="SELECT ...")
 ```
 
 Paged views behave like any other: `toggle`, `slice`, `histogram`, `suggest`, `cluster`
@@ -413,7 +413,7 @@ fit          92,436 rows x 11 cols -> sum(bytes) by dst_ip (top 39) x rule    2.
 pivot        sum(bytes) by dst_ip (top 39) x rule -> 40 x 8    0.71s  cpu  0.88s  mem    +44 MB
 ```
 
-**Engine**: `engine="duckdb"` (`pip install "pivot2hist[duckdb]"`) runs the group-by/
+**Engine**: `engine="duckdb"` (`pip install "bts-pivot[duckdb]"`) runs the group-by/
 aggregate that builds the table as SQL against DuckDB instead of `pandas.pivot_table`,
 for the dim kinds it can express there (categorical, binned, plain time buckets) - a
 semantic drill level or a cyclic time bucket fall back to pandas for that layout, same
@@ -424,27 +424,27 @@ across repeated queries on the same frame via a small connection cache, but stil
 on the first one).
 
 ```python
-p2h.fit(df, engine="duckdb")
+bp.fit(df, engine="duckdb")
 v.pivot()   # same numbers either way; v.options.engine is "pandas" unless you asked
 ```
 
 ## Log and stats
 
-`p2h.verbose()` prints every major step (survey, plan, sample, pages, fit, pivot, cluster,
+`bp.verbose()` prints every major step (survey, plan, sample, pages, fit, pivot, cluster,
 render ...) to stderr as it finishes, with wall time, CPU time and the memory delta.
-`p2h.log.tail(12)` gives the last lines, `p2h.log.listen(fn)` streams them to your own
-sink (the explorer's log panel is one). `p2h.stats(7)` (or `v.stats()`) is the report of
+`bp.log.tail(12)` gives the last lines, `bp.log.listen(fn)` streams them to your own
+sink (the explorer's log panel is one). `bp.stats(7)` (or `v.stats()`) is the report of
 the seven costliest kinds of step: calls, total seconds, CPU seconds, peak memory delta,
 last detail.
 
 ## Matrices and chains
 
 ```python
-v = p2h.chains(df, "event", by="user", time="timestamp")     # rows = from, cols = to, counts
-p2h.chains(df, "event", by="user", time="timestamp", normalize=True)   # row probabilities
-p2h.chains(df, "dst_port", by="src_ip", time="timestamp", order=2)     # conditioned on the previous two
-p2h.sequences(df, "event", by="user", time="timestamp", length=3, n=10) # most frequent 3-step chains
-p2h.steady_state(p2h.transition_matrix(df, "event", by="user"))         # stationary distribution
+v = bp.chains(df, "event", by="user", time="timestamp")     # rows = from, cols = to, counts
+bp.chains(df, "event", by="user", time="timestamp", normalize=True)   # row probabilities
+bp.chains(df, "dst_port", by="src_ip", time="timestamp", order=2)     # conditioned on the previous two
+bp.sequences(df, "event", by="user", time="timestamp", length=3, n=10) # most frequent 3-step chains
+bp.steady_state(bp.transition_matrix(df, "event", by="user"))         # stationary distribution
 ```
 
 Transitions never cross an entity (`by`); the result is an ordinary pivot, so
@@ -458,7 +458,7 @@ normalised matrix, block count from the eigengap) or `v.cocluster(method="mcl")`
 clustering: random walks on the bipartite row-column graph, expansion and inflation until
 they settle). `nest=False` only reorders the axes instead of adding block levels.
 
-**Regimes**: a chain shows what follows what; `p2h.regimes()` goes one step further and
+**Regimes**: a chain shows what follows what; `bp.regimes()` goes one step further and
 asks whether an entity's sequence is drifting between a small number of hidden *behavioural
 states* - a user's logins settling into a "normal" regime most of the time, then switching
 into a "credential-stuffing" regime for a stretch. A Baum-Welch fit (scaled forward-
@@ -467,13 +467,13 @@ backward EM, multi-sequence, no hmmlearn/scipy) trains a categorical-emission HM
 `modes()`) unless you fix it, and Viterbi decodes the most likely regime per row.
 
 ```python
-p2h.regimes(df, "event", by="user", time="timestamp")            # rows = regime, cols = event
-p2h.regimes(df, "event", by="user", time="timestamp", n_states=3) # fix the regime count
-from pivot2hist import decode_regimes, fit_hmm
+bp.regimes(df, "event", by="user", time="timestamp")            # rows = regime, cols = event
+bp.regimes(df, "event", by="user", time="timestamp", n_states=3) # fix the regime count
+from bts_pivot import decode_regimes, fit_hmm
 decode_regimes(df, "event", by="user", time="timestamp")          # just the regime Series
 ```
 
-Like every other collection feature here, `p2h.regimes()` returns a `View` - `.toggle()`
+Like every other collection feature here, `bp.regimes()` returns a `View` - `.toggle()`
 it to a histogram, `.slice()` it, style it, the same as any other pivot.
 
 ## Density clustering
@@ -481,7 +481,7 @@ it to a histogram, `.slice()` it, style it, the same as any other pivot.
 `method="gmm"` fits a Gaussian mixture (EM, k-means++ seeded, component count chosen by
 BIC unless you fix `k`) instead of hard k-means - useful when clusters overlap or have
 different spreads. The same machinery powers `bins="mixture"` (bin edges at the valleys
-between fitted components, instead of equal-width or quantile bins) and `p2h.modes(df,
+between fitted components, instead of equal-width or quantile bins) and `bp.modes(df,
 "bytes")` / `v.modes("bytes")`, which just answers "how many peaks does this column have,
 and where" as a list of `{"weight", "mean", "std"}` dicts - e.g. two components at ~200 B
 and ~5 KB for a bimodal transfer-size column, with no scipy/sklearn dependency.
@@ -489,8 +489,8 @@ and ~5 KB for a bimodal transfer-size column, with no scipy/sklearn dependency.
 ```python
 v.cluster(method="gmm")                        # auto k by BIC
 v.cluster(k=3, method="gmm", on=["bytes", "duration"])
-p2h.histogram(df, "bytes", bins="mixture")      # bin edges at the mixture's valleys
-p2h.modes(df, "bytes")                          # [{"weight": .62, "mean": 210.4, "std": 38.1}, ...]
+bp.histogram(df, "bytes", bins="mixture")      # bin edges at the mixture's valleys
+bp.modes(df, "bytes")                          # [{"weight": .62, "mean": 210.4, "std": 38.1}, ...]
 ```
 
 `method="dbscan"` clusters by density with an automatic radius (knee of the k-distance
@@ -501,12 +501,12 @@ installed and falls back to DBSCAN with a note in the log otherwise.
 ```python
 v.cluster(method="dbscan")                     # pivot rows; noise rows grouped apart
 v.cluster(on=["bytes", "duration"], method="hdbscan")
-p2h.cluster(df, ["bytes", "duration"], method="dbscan")
+bp.cluster(df, ["bytes", "duration"], method="dbscan")
 ```
 
 ## Dependency map
 
-`p2h.dependencies(df)` answers "which columns move together" as a square pivot: rows and
+`bp.dependencies(df)` answers "which columns move together" as a square pivot: rows and
 columns are both the column names, cells are normalized mutual information (0..1). Unlike
 a correlation matrix, it makes no linearity or numeric-only assumption - every column is
 discretized (numeric/datetime into quantile bins, categorical/boolean by top-N) and scored
@@ -515,9 +515,9 @@ already uses), so a categorical/numeric pair like `protocol` and `dst_port` show
 as well as two numeric ones.
 
 ```python
-p2h.dependencies(df)                              # every non-constant, non-id column, capped to 30
-p2h.dependencies(df, columns=["method", "mfa", "event"])  # just these
-p2h.mutual_info_matrix(df)                         # the plain DataFrame, if you don't want a View
+bp.dependencies(df)                              # every non-constant, non-id column, capped to 30
+bp.dependencies(df, columns=["method", "mfa", "event"])  # just these
+bp.mutual_info_matrix(df)                         # the plain DataFrame, if you don't want a View
 ```
 
 It's a `View` like everything else: `.toggle()` gives a histogram of each column's total
@@ -538,10 +538,10 @@ pivot and an additive measure (`sum`/`count`).
 ```python
 v.style(heat="surprise")
 v.anomalies(10)          # e.g. a (port, action) pair that denies far more than its margins predict
-p2h.agent.anomalies("firewall.csv", rows=["dst_port"], cols=["action"])
+bp.agent.anomalies("firewall.csv", rows=["dst_port"], cols=["action"])
 ```
 
-**What distribution does this column look like?** `p2h.distribution(df, "bytes")` (or
+**What distribution does this column look like?** `bp.distribution(df, "bytes")` (or
 `v.distribution("bytes")`) fits normal, lognormal, exponential, gamma, uniform, poisson,
 geometric, bernoulli and discrete-uniform by BIC (log-likelihood penalised by parameter
 count) and returns the best one — closed-form MLE, no scipy. Integer data only competes
@@ -552,8 +552,8 @@ comparable by raw likelihood (a density can exceed 1 and would win unfairly on r
 discrete values otherwise). Not run automatically — it's a further, explicit pass:
 
 ```python
-p2h.distribution(df, "bytes").describe()   # "Lognormal(mu=7.02, sigma=1.83)"
-p2h.rank_distributions(df["duration"])     # every family that fits, best first
+bp.distribution(df, "bytes").describe()   # "Lognormal(mu=7.02, sigma=1.83)"
+bp.rank_distributions(df["duration"])     # every family that fits, best first
 ```
 
 **How much better is this layout than the alternatives?** `v.confidence` is `"high"`,
@@ -568,12 +568,12 @@ ranked answer to "what's actually interesting in the data I'm looking at right n
 every slice already applied, nothing sent anywhere, no model call:
 
 ```python
-v = p2h.fit("firewall.csv").slice(action="deny")
+v = bp.fit("firewall.csv").slice(action="deny")
 report = v.insights()
 report["summary"]      # "4,000 rows x 11 columns (8 categorical, 2 numeric, 1 datetime). 6 notable finding(s) ..."
 report["columns"]      # per-column: kind, semantic type, cardinality, and (numeric) mean/median/std/best-fit distribution
 report["findings"]     # ranked list: {"kind", "columns", "significance", "text"}
-p2h.insights(df, rows=["src_ip"])   # the plain function, auto-fits first
+bp.insights(df, rows=["src_ip"])   # the plain function, auto-fits first
 ```
 
 Each finding is one of: **skew** (median beats mean as a summary here), **modality** (a
@@ -584,7 +584,7 @@ that's really two or more distinct populations, not one: the "mixle"-inspired pi
 the middle 80% of the data so a couple of extreme outliers on an otherwise skewed column
 can't make it misread as constant), **high_cardinality** (variety close to an id, on a
 column the profiler didn't already call one), **correlation** (the most mutually-
-informative column pairs — see `p2h.dependencies()`), **anomaly** (the most surprising
+informative column pairs — see `bp.dependencies()`), **anomaly** (the most surprising
 cells of the current pivot, when there is one — see `v.anomalies()`), **spike** (the
 strongest movements over time per row of the table, against a seasonal baseline — see
 `v.spikes()` below) and **novelty** (what appeared in the last quarter of the time span:
@@ -619,13 +619,13 @@ measured by the median absolute deviation, so the spike doesn't inflate the yard
 judged by:
 
 ```python
-v = p2h.fit("firewall.csv", rows=["dst_port"], cols=["action"])
+v = bp.fit("firewall.csv", rows=["dst_port"], cols=["action"])
 v.spikes("timestamp")            # column defaults to the first datetime column not on the row axis
 #     row            bucket   kind  observed  expected  ratio  score  support  baseline
 # 0  3389  2026-03-04 12:00  spike     262.0      14.0   18.7   55.8      262  seasonal
 # 1   445  2026-03-03 06:00  shift down  60.0     127.5    0.5   -5.0       60  seasonal
 v.spikes(baseline="median", z=4, shifts=False)   # plain per-row median, stricter, single buckets only
-p2h.spikes(df, rows=["src_ip"], values="bytes", agg="sum")
+bp.spikes(df, rows=["src_ip"], values="bytes", agg="sum")
 ```
 
 Two kinds of movement come back, one per line, strongest first: a **spike** or **drop**
@@ -697,7 +697,7 @@ v.compare("bytes > 1000")                          # a query vs its complement
 v.compare({"timestamp": "2026-03-02"},
           {"timestamp": "2026-03-01"})             # today vs yesterday, from one view
 today.compare(yesterday)                           # two Views (yesterday laid out like today)
-p2h.compare("events.parquet", action="deny")       # the plain function: auto-fits, then splits
+bp.compare("events.parquet", action="deny")       # the plain function: auto-fits, then splits
 ```
 
 **The layout is frozen across the sides.** Auto-fitting each side separately would pick
@@ -754,7 +754,7 @@ the numeric whose median differs most (as a ratio) — the same measure `explain
 for "what sets these rows apart", run on the two sides as peers:
 
 ```python
-c = p2h.compare(df, action="deny", rows=["dst_port"], cols=["protocol"], agg="count")
+c = bp.compare(df, action="deny", rows=["dst_port"], cols=["protocol"], agg="count")
 c.top(3)          # ... lift, p, only_in
 c.drivers()       # `bytes` median 62 in action=deny vs 924 in rest (×0.068); `severity` is '1' for 0% of action=deny vs 43% of rest ...
 ```
@@ -838,7 +838,7 @@ Code tab shows it as `v.cell(...)` and Undo reverses it.
 ## Jupyter explorer
 
 ```python
-p2h.explore(df)                                  # or v.explore(); files/DuckDB are surveyed and paged
+bp.explore(df)                                  # or v.explore(); files/DuckDB are surveyed and paged
 ```
 
 An ipywidgets + anywidget app: Pivot / Histogram / Chains toggle, **Best fit**,
@@ -877,7 +877,7 @@ picture of the interface for docs or sharing.
 (`n`), distinct count (`≠`), *variety* (distinct ÷ non-null, as a small bar:
 a handful of repeated labels reads near-empty, an id-like column reads full) and, for a
 numeric or datetime column with enough spread, a small **glyph**: a value-distribution
-histogram for numeric, a row-count-over-time trend for datetime (`p2h.ui_fields.field_stats(profile, df)`
+histogram for numeric, a row-count-over-time trend for datetime (`bp.ui_fields.field_stats(profile, df)`
 computes it; `make_field_list(profile, df, ...)` wires it into the pane — skip `df` for
 the old, glyph-free chips) — dropped into **Rows** / **Columns** / **Values** /
 **Slicers**. Drop more than one field on an
@@ -906,7 +906,7 @@ checkpoint automatically for a simple annotated playback. `explorer.goto_checkpo
 does the same thing from code (negative indexes from the end, like a list).
 
 ```python
-explorer = p2h.explore(df)
+explorer = bp.explore(df)
 # ... shape the layout, slice down, style it ...
 explorer.save_checkpoint("clean baseline")
 # ... slice to a suspicious host, try a few things ...
@@ -914,7 +914,7 @@ explorer.save_checkpoint("host 10.0.4.12 spike investigation")
 explorer.goto_checkpoint(0)     # back to the baseline, or just drag the Timeline slider
 ```
 
-**Clone**: re-profiling a wide or large frame is real work, and every `p2h.explore(df)`
+**Clone**: re-profiling a wide or large frame is real work, and every `bp.explore(df)`
 call normally does it again. `explorer.clone()` opens a second, independent explorer
 (for a second notebook cell) that shares this one's already-computed profile and
 underlying frame — no re-profiling, no data copy — starting from the same layout (or
@@ -939,7 +939,7 @@ default and renders byte-identical to earlier releases.
 ## Export to an LLM prompt
 
 Everything on screen, packaged as one self-contained prompt for whichever model or chat
-you use — pivot2hist itself never calls one:
+you use — bts-pivot itself never calls one:
 
 ```python
 p = v.prompt("Which destination ports deserve a firewall rule, and why?")
@@ -962,7 +962,7 @@ data-quality flags.
 ```python
 v.prompt(insights=True, compare={"action": "deny"}, explain=("22", "deny"))   # the full packet
 v.compare(action="deny").prompt("What changed, and does it matter?")            # a comparison on its own
-p2h.prompt("events.parquet", "What's unusual?", rows=["dst_port"], cols=["action"])  # the plain function
+bp.prompt("events.parquet", "What's unusual?", rows=["dst_port"], cols=["action"])  # the plain function
 ```
 
 Why a prompt rather than a screenshot or a summary you type yourself: the model gets the
@@ -982,14 +982,14 @@ client can offer "analyze this file" the way it offers its own slash-command pro
 
 ## For LLM agents
 
-`pivot2hist.agent` is a plain-JSON surface: every function takes and returns only
+`bts_pivot.agent` is a plain-JSON surface: every function takes and returns only
 `str`/`int`/`float`/`bool`/`None`/`list`/`dict` — never a DataFrame or a pandas/numpy
 object — so a tool-calling agent's framework can pass the model's arguments straight
 through and hand the result straight back, no pandas import on the caller's side.
 Docstrings there double as the tool descriptions below.
 
 ```python
-from pivot2hist import agent
+from bts_pivot import agent
 
 agent.describe("events.parquet")                          # columns, semantic types, time series; surveys, never fully loads
 agent.pivot("events.parquet", rows=["src_ip"], cols=["action"],
@@ -1007,7 +1007,7 @@ agent.prompt("events.parquet", question="What's unusual?", split={"column": "act
 ```
 
 Filter objects: `{"column": c, "eq"|"not_eq"|"in"|"range"|"gt"|"gte"|"lt"|"lte"|"regex"|"since"|"on": value}`
-or `{"query": "bytes > 1000 and action == 'deny'"}` (`pivot2hist.agent.FILTER_OPS` lists
+or `{"query": "bytes > 1000 and action == 'deny'"}` (`bts_pivot.agent.FILTER_OPS` lists
 the operators). Everything routes through `fit()`, so a huge file is surveyed and paged
 the same as in a notebook, and a paged result says `"paged": true` (`count`/`sum`/`min`/
 `max`/`mean` stay exact; other aggregations fall back to a sample and say
@@ -1032,16 +1032,16 @@ agent.llm_context("events.parquet", rows=["src_ip"], cols=["action"])
 Prefer `pivot()` when the result feeds back into your own code; prefer `llm_context()`
 when it's headed into a model's context window instead.
 
-**MCP server**: `pivot2hist-mcp` exposes the same operations to any MCP client — Claude
+**MCP server**: `bts-pivot-mcp` exposes the same operations to any MCP client — Claude
 Code, Claude Desktop, or your own agent — over stdio: the client spawns it as a local
 subprocess and talks to it over stdin/stdout, exactly like `npx`-launched Node MCP
 servers do, just with Python's own zero-persistent-install tools instead of `npx`. No
 server to host, no port to open, no npm/Node involved at all.
 
 ```
-uvx --from "pivot2hist[mcp]" pivot2hist-mcp     # zero install: uv fetches, runs, discards
-pipx run --spec "pivot2hist[mcp]" pivot2hist-mcp  # same idea, via pipx
-pip install "pivot2hist[mcp]" && pivot2hist-mcp   # or install it properly, if you'll use it a lot
+uvx --from "bts-pivot[mcp]" bts-pivot-mcp     # zero install: uv fetches, runs, discards
+pipx run --spec "bts-pivot[mcp]" bts-pivot-mcp  # same idea, via pipx
+pip install "bts-pivot[mcp]" && bts-pivot-mcp   # or install it properly, if you'll use it a lot
 ```
 
 Point your MCP client at whichever of those you prefer. For Claude Code, a project-level
@@ -1052,9 +1052,9 @@ shape under `mcpServers`:
 ```json
 {
   "mcpServers": {
-    "pivot2hist": {
+    "bts-pivot": {
       "command": "uvx",
-      "args": ["--from", "pivot2hist[mcp]", "pivot2hist-mcp"]
+      "args": ["--from", "bts-pivot[mcp]", "bts-pivot-mcp"]
     }
   }
 }
@@ -1091,13 +1091,13 @@ installed.
 You can also just run it directly, no client needed:
 
 ```
-pivot2hist-mcp                    # stdio server; what the config above launches
-python -m pivot2hist.mcp_server   # the same thing
+bts-pivot-mcp                    # stdio server; what the config above launches
+python -m bts_pivot.mcp_server   # the same thing
 ```
 
 ## Loading data
 
-`p2h.load()` accepts a DataFrame or Series, a file path (csv, tsv, json, jsonl, parquet,
+`bp.load()` accepts a DataFrame or Series, a file path (csv, tsv, json, jsonl, parquet,
 xlsx, feather, optionally compressed), a list of dicts, a dict of lists or a 2-D numpy
 array. Text timestamps, epoch integers, numeric strings and yes/no strings are converted
 (`parse_dates=False`, `infer_types=False` to skip). Non-string column names are stringified,
@@ -1114,7 +1114,7 @@ hash them, e.g. to build a category; the rest of the pipeline never sees the raw
 unhashable value). `inf`/`-inf`, extreme magnitudes, all-null columns, a single row, a
 single column, an empty frame, duplicate or non-string column names, mismatched
 tz-aware/naive datetimes — all either work as you'd expect or fail with a specific,
-pivot2hist-level message (never a bare `KeyError`/`IndexError` from three modules deep
+bts-pivot-level message (never a bare `KeyError`/`IndexError` from three modules deep
 in pandas or numpy) naming what's wrong and, where relevant, what's accepted instead.
 `tests/test_robustness.py` is the record of this: every case there traces back to a bug
 that was actually found and fixed, not a hypothetical.
@@ -1122,7 +1122,7 @@ that was actually found and fixed, not a hypothetical.
 ## CLI
 
 ```
-pivot2hist FILE [--hist] [--on COL] [--by COL,COL] [--bins N|rule] [--scale auto|linear|log]
+bts-pivot FILE [--hist] [--on COL] [--by COL,COL] [--bins N|rule] [--scale auto|linear|log]
                 [--rows COL,COL] [--cols COL,COL] [--values COL] [--agg sum|mean|...] [--count]
                 [--max-rows N] [--max-cols N] [--layers N] [--aspect R]
                 [--slice COL=VAL]... [--where EXPR]
@@ -1130,8 +1130,8 @@ pivot2hist FILE [--hist] [--on COL] [--by COL,COL] [--bins N|rule] [--scale auto
                 [--table T | --query SQL]   (duckdb://db.duckdb sources)
                 [--chains STATE --by ENTITY --time COL]
                 [-v] [--stats] [--json | --csv | --layout | --profile | --slicers] [--width N] [--ascii]
-pivot2hist --demo firewall|auth
-cat data.csv | pivot2hist -
+bts-pivot --demo firewall|auth
+cat data.csv | bts-pivot -
 ```
 
 ## Options
@@ -1179,16 +1179,20 @@ enough for PyPI — no Poetry migration needed, and definitely no Node/npm (that
 separate ecosystem for JavaScript packages; this is a pure-Python one, installed and run
 entirely with `pip`/`pipx`/`uv`).
 
-**One-time setup**, before the first release: on [pypi.org](https://pypi.org), under the
-project's *Publishing* settings, add a **trusted publisher** — GitHub owner `700799`,
-repository `pivot2hist`, workflow `publish.yml`, environment `pypi`. This lets GitHub
-Actions authenticate to PyPI via OIDC with no API token to create, store in a secret, or
-rotate later.
+**One-time setup**, before the first release: `bts-pivot` doesn't exist on PyPI yet, so
+there's no project *Publishing* settings page to use. Instead, go to
+[pypi.org/manage/account/publishing/](https://pypi.org/manage/account/publishing/) (under
+your PyPI account) and add a **pending trusted publisher** — PyPI project name
+`bts-pivot`, GitHub owner `700799`, repository `pivot2hist`, workflow `publish.yml`,
+environment `pypi`. The first successful publish from that workflow claims the project
+name and converts the pending publisher into a regular one. This lets GitHub Actions
+authenticate to PyPI via OIDC with no API token to create, store in a secret, or rotate
+later.
 
 **Every release** after that:
 
 ```
-# bump version in both pyproject.toml and src/pivot2hist/__init__.py (kept in sync)
+# bump version in both pyproject.toml and src/bts_pivot/__init__.py (kept in sync)
 git tag v0.13.0 && git push --tags
 # then, on GitHub: Releases -> Draft a new release -> pick the tag -> Publish
 ```

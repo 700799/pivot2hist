@@ -1,4 +1,4 @@
-"""Optional DuckDB pushdown for :func:`pivot2hist._fit.build_table`'s group-by step.
+"""Optional DuckDB pushdown for :func:`bts_pivot._fit.build_table`'s group-by step.
 
 Layout planning (which dims, bin edges, top-N budgets, time frequency) stays in pandas
 on a bounded sample - it's already cheap. What DuckDB buys is the scan + group-by +

@@ -1,13 +1,13 @@
-"""An MCP (Model Context Protocol) server exposing pivot2hist to any MCP-speaking agent
+"""An MCP (Model Context Protocol) server exposing bts-pivot to any MCP-speaking agent
 (Claude Code, Claude Desktop, and other MCP clients).
 
 ::
 
-    pip install "pivot2hist[mcp]"
-    pivot2hist-mcp                    # stdio server, add it to your MCP client's config
-    python -m pivot2hist.mcp_server   # same thing
+    pip install "bts-pivot[mcp]"
+    bts-pivot-mcp                    # stdio server, add it to your MCP client's config
+    python -m bts_pivot.mcp_server   # same thing
 
-Each tool is a thin wrapper around :mod:`pivot2hist.agent`: JSON in, JSON out, so the
+Each tool is a thin wrapper around :mod:`bts_pivot.agent`: JSON in, JSON out, so the
 tool's declared schema (built from the function's type hints) and its docstring are the
 whole contract an agent sees. Works against both the 1.x (``mcp.server.fastmcp.FastMCP``)
 and 2.x (``mcp.server.mcpserver.MCPServer``) releases of the ``mcp`` SDK, whichever is
@@ -24,13 +24,13 @@ except ImportError:
         from mcp.server.mcpserver import MCPServer as _Server  # mcp >= 2.0
     except ImportError as e:  # pragma: no cover
         raise ImportError(
-            "pivot2hist.mcp_server needs the mcp package: pip install 'pivot2hist[mcp]'"
+            "bts_pivot.mcp_server needs the mcp package: pip install 'bts-pivot[mcp]'"
         ) from e
 
 from . import agent as _agent
 
 server = _Server(
-    "pivot2hist",
+    "bts-pivot",
     instructions=(
         "Pivot and explore tabular data (CSV/TSV/JSON/JSONL/Parquet/DuckDB, or inline "
         "records). Start with describe() to see the columns; call pivot() with no "

@@ -7,9 +7,9 @@ just by having more knobs). This is the "guess the density" half of type guessin
 inspired by the automatic-model-selection idea in probabilistic-modeling libraries —
 written from scratch, with a handful of named families rather than a general engine.
 
-Deliberately not wired into :func:`pivot2hist.profile` or the auto-fit search: fitting
+Deliberately not wired into :func:`bts_pivot.profile` or the auto-fit search: fitting
 five-plus distributions is too slow to run on every candidate column during a layout
-search, so this is opt-in (:func:`pivot2hist.distribution`, ``View.distribution()``).
+search, so this is opt-in (:func:`bts_pivot.distribution`, ``View.distribution()``).
 """
 from __future__ import annotations
 

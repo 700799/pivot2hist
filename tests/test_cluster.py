@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from pivot2hist import _cluster as C
+from bts_pivot import _cluster as C
 
 
 def _blobs(seed=0):

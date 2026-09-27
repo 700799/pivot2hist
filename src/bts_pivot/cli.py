@@ -1,4 +1,4 @@
-"""Command line: ``pivot2hist data.csv [--hist] [--slice col=val] ...``"""
+"""Command line: ``bts-pivot data.csv [--hist] [--slice col=val] ...``"""
 from __future__ import annotations
 
 import argparse
@@ -53,12 +53,12 @@ def _csv_list(text: Optional[str]) -> Optional[List[str]]:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="pivot2hist",
+        prog="bts-pivot",
         description="Auto-fit tabular data into a pivot table, toggle to a histogram, slice it.",
     )
     p.add_argument("file", nargs="?", help="csv/tsv/json/jsonl/parquet/xlsx file, duckdb://db?table=t (or - for stdin csv)")
     p.add_argument("--demo", choices=["firewall", "auth"], help="use a built-in sample dataset")
-    p.add_argument("-V", "--version", action="version", version=f"pivot2hist {__version__}")
+    p.add_argument("-V", "--version", action="version", version=f"bts-pivot {__version__}")
 
     d = p.add_argument_group("data size")
     d.add_argument("--survey", action="store_true", help="print the size survey and plan, then exit")
