@@ -3,17 +3,17 @@ import json
 import pandas as pd
 import pytest
 
-import bts_pivot as p2h
+import bts_pivot as bp
 from bts_pivot._llm import markdown_table
 
 
 @pytest.fixture(scope="module")
 def fw():
-    return p2h.sample.firewall_logs(3000, seed=1)
+    return bp.sample.firewall_logs(3000, seed=1)
 
 
 def test_llm_context_shape(fw):
-    v = p2h.fit(fw)
+    v = bp.fit(fw)
     ctx = v.llm_context()
     assert set(ctx) == {"description", "metadata", "table"}
     assert isinstance(ctx["description"], str) and ctx["description"]
@@ -22,7 +22,7 @@ def test_llm_context_shape(fw):
 
 
 def test_llm_context_is_json_safe(fw):
-    v = p2h.fit(fw)
+    v = bp.fit(fw)
     ctx = v.llm_context()
     # round-trips through json with no TypeError (no Timestamp/np.int64/etc left over)
     round_tripped = json.loads(json.dumps(ctx))
@@ -30,7 +30,7 @@ def test_llm_context_is_json_safe(fw):
 
 
 def test_llm_context_metadata_fields(fw):
-    v = p2h.fit(fw, rows=["dst_ip"], cols=["rule"], values="bytes", agg="sum")
+    v = bp.fit(fw, rows=["dst_ip"], cols=["rule"], values="bytes", agg="sum")
     ctx = v.llm_context()
     m = ctx["metadata"]
     assert m["mode"] == "pivot"
@@ -44,14 +44,14 @@ def test_llm_context_metadata_fields(fw):
 
 
 def test_llm_context_description_mentions_shape_and_measure(fw):
-    v = p2h.fit(fw, rows=["action"], cols=["protocol"], values="bytes", agg="sum")
+    v = bp.fit(fw, rows=["action"], cols=["protocol"], values="bytes", agg="sum")
     ctx = v.llm_context()
     assert "sum(bytes)" in ctx["description"]
     assert "3,000 rows" in ctx["description"]
 
 
 def test_llm_context_notes_toggle(fw):
-    v = p2h.fit(fw, rows=["action"], cols=["protocol"])
+    v = bp.fit(fw, rows=["action"], cols=["protocol"])
     with_notes = v.llm_context(notes=True)
     without_notes = v.llm_context(notes=False)
     assert "notable" in with_notes["metadata"]
@@ -59,41 +59,41 @@ def test_llm_context_notes_toggle(fw):
 
 
 def test_llm_context_no_anomalies_for_1d_layout(fw):
-    v = p2h.fit(fw, rows=["action"], cols=[])
+    v = bp.fit(fw, rows=["action"], cols=[])
     ctx = v.llm_context()
     assert "notable" not in ctx["metadata"]
     assert "surprising" not in ctx["description"]
 
 
 def test_llm_context_reflects_slices(fw):
-    v = p2h.fit(fw).slice(action="deny")
+    v = bp.fit(fw).slice(action="deny")
     ctx = v.llm_context()
     assert ctx["metadata"]["slices"] == v.slices
     assert "Sliced to" in ctx["description"]
 
 
 def test_llm_context_histogram_mode(fw):
-    h = p2h.fit(fw, rows=["bytes"], values=None, agg=None).toggle()
+    h = bp.fit(fw, rows=["bytes"], values=None, agg=None).toggle()
     ctx = h.llm_context()
     assert ctx["metadata"]["mode"] == "hist"
     assert "Histogram" in ctx["description"]
 
 
 def test_top_level_llm_context_matches_view_method(fw):
-    a = p2h.llm_context(fw, rows=["action"], cols=["protocol"])
-    b = p2h.fit(fw, rows=["action"], cols=["protocol"]).llm_context()
+    a = bp.llm_context(fw, rows=["action"], cols=["protocol"])
+    b = bp.fit(fw, rows=["action"], cols=["protocol"]).llm_context()
     assert a["metadata"]["measure"] == b["metadata"]["measure"]
     assert a["table"] == b["table"]
 
 
 def test_agent_llm_context_is_json_safe(fw):
-    ctx = p2h.agent.llm_context(fw, rows=["action"])
+    ctx = bp.agent.llm_context(fw, rows=["action"])
     json.dumps(ctx)  # must not raise
     assert set(ctx) == {"description", "metadata", "table"}
 
 
 def test_agent_llm_context_with_filters(fw):
-    ctx = p2h.agent.llm_context(fw, rows=["action"], filters=[{"column": "action", "eq": "deny"}])
+    ctx = bp.agent.llm_context(fw, rows=["action"], filters=[{"column": "action", "eq": "deny"}])
     assert "action=deny" in ctx["metadata"]["slices"][0] or "deny" in ctx["metadata"]["slices"][0]
 
 

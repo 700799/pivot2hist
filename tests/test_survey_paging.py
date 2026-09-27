@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import bts_pivot as p2h
+import bts_pivot as bp
 from bts_pivot._survey import Machine, PagedSource, _conform, downcast, load_planned, survey
 
 pq = pytest.importorskip("pyarrow")
@@ -11,7 +11,7 @@ pq = pytest.importorskip("pyarrow")
 @pytest.fixture(scope="module")
 def files(tmp_path_factory):
     d = tmp_path_factory.mktemp("data")
-    df = p2h.sample.firewall_logs(30_000, seed=3)
+    df = bp.sample.firewall_logs(30_000, seed=3)
     csv, parquet, jsonl = d / "fw.csv", d / "fw.parquet", d / "fw.jsonl"
     df.to_csv(csv, index=False)
     df.to_parquet(parquet, index=False, row_group_size=5_000)
@@ -80,18 +80,18 @@ def test_duckdb_source(files, tmp_path):
     pg, _ = load_planned(url, memory_budget_mb=3, page_rows=8_192)
     assert isinstance(pg, PagedSource) and sum(len(p) for p in pg.pages()) == 30_000
     con = duckdb.connect(str(path), read_only=True)
-    v = p2h.fit(con, query="SELECT action, bytes, dst_port FROM events", memory_budget_mb=0.5)
+    v = bp.fit(con, query="SELECT action, bytes, dst_port FROM events", memory_budget_mb=0.5)
     assert v.paged is not None and v.pivot().to_numpy().sum() > 0
-    full = p2h.fit(con, table="events")
+    full = bp.fit(con, table="events")
     assert full.paged is None and len(full.data) == 30_000
     con.close()
 
 
 def test_paged_view_exactness(files):
     df = files["df"]
-    full = p2h.fit(files["parquet"])
+    full = bp.fit(files["parquet"])
     assert full.survey is not None and full.paged is None
-    pg = p2h.fit(files["parquet"], memory_budget_mb=3)
+    pg = bp.fit(files["parquet"], memory_budget_mb=3)
     assert pg.paged is not None and "(paged" in pg.title() and "≈" in pg.title()
     ref = full.relayout(rows=list(pg.layout.rows), cols=list(pg.layout.cols), **pg._measure_spec()).pivot()
     got = pg.pivot()
@@ -131,6 +131,6 @@ def test_paged_view_exactness(files):
 
 
 def test_fit_frame_with_budget_uses_survey(files):
-    v = p2h.fit(files["df"], memory_budget_mb=1_000)
+    v = bp.fit(files["df"], memory_budget_mb=1_000)
     assert v.survey is not None and v.survey.format == "frame"
-    assert p2h.fit(files["df"]).survey is None
+    assert bp.fit(files["df"]).survey is None

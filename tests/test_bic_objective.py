@@ -2,22 +2,22 @@ import math
 
 import pytest
 
-import bts_pivot as p2h
+import bts_pivot as bp
 from bts_pivot._fit import Dim, FitOptions, OBJECTIVES, Shape, _bic_association, score_layout
 
 
 def test_default_objective_is_heuristic_and_unchanged():
     assert FitOptions().objective == "heuristic"
-    auth = p2h.sample.auth_logs(1500, seed=1)
-    v_default = p2h.fit(auth)
-    v_explicit = p2h.fit(auth, objective="heuristic")
+    auth = bp.sample.auth_logs(1500, seed=1)
+    v_default = bp.fit(auth)
+    v_explicit = bp.fit(auth, objective="heuristic")
     assert v_default.layout == v_explicit.layout
 
 
 def test_unknown_objective_raises():
-    auth = p2h.sample.auth_logs(200, seed=1)
+    auth = bp.sample.auth_logs(200, seed=1)
     with pytest.raises(ValueError):
-        p2h.fit(auth, objective="bogus").pivot()
+        bp.fit(auth, objective="bogus").pivot()
 
 
 def test_bic_association_rewards_signal_over_noise():
@@ -56,8 +56,8 @@ def test_bic_mode_penalizes_bigger_table_relative_to_heuristic_mode():
 
 
 def test_bic_mode_produces_a_valid_layout_end_to_end():
-    auth = p2h.sample.auth_logs(3000, seed=1)
-    v = p2h.fit(auth, objective="bic")
+    auth = bp.sample.auth_logs(3000, seed=1)
+    v = bp.fit(auth, objective="bic")
     assert v.layout.rows and v.pivot().shape[0] >= 1
 
 
@@ -71,4 +71,4 @@ def test_row_only_scoring_is_well_defined_for_bic():
 
 def test_objectives_constant_exported():
     assert OBJECTIVES == ("heuristic", "bic")
-    assert p2h.OBJECTIVES == OBJECTIVES
+    assert bp.OBJECTIVES == OBJECTIVES

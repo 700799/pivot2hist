@@ -3,8 +3,8 @@ cluster, rendered with the dependency-free HTML/SVG graphics.
 
 ::
 
-    import bts_pivot as p2h
-    p2h.explore(df)            # or view.explore()
+    import bts_pivot as bp
+    bp.explore(df)            # or view.explore()
 
 Needs ``ipywidgets`` (``pip install "bts-pivot[jupyter]"``). The explorer keeps a small
 *recipe* (layout spec, options, slices, mode, histogram/cluster/style settings) and
@@ -93,12 +93,12 @@ class Explorer:
     def _cluster(caption: str, *widgets: Any) -> Any:
         """A labelled group of top-bar controls (a caption plus the widgets, in one frame)."""
         label = W.HTML(
-            f"<span class='p2h-caption' style='font-size:10px;letter-spacing:.08em;text-transform:uppercase;"
+            f"<span class='bp-caption' style='font-size:10px;letter-spacing:.08em;text-transform:uppercase;"
             f"color:#889;margin:0 4px 0 2px'>{_html.escape(caption)}</span>",
             layout=W.Layout(align_self="center"),
         )
         box = W.HBox([label, *widgets], layout=W.Layout(align_items="center"))
-        box.add_class("p2h-cluster")
+        box.add_class("bp-cluster")
         return box
 
     def _chrome_css(self) -> str:
@@ -107,12 +107,12 @@ class Explorer:
         c = self._CHROME_THEME.get(str(self.display.get("theme", "light")), self._CHROME_THEME["light"])
         return (
             "<style>"
-            ".p2h-topbar{gap:10px;flex-wrap:wrap;margin:2px 0 6px 0}"
-            f".p2h-cluster{{padding:3px 8px 3px 4px;border:1px solid {c['border']};border-radius:8px;background:{c['field']};gap:4px}}"
-            ".p2h-groups .lm-TabBar-tab,.p2h-groups .p-TabBar-tab{font-weight:600;text-transform:uppercase;letter-spacing:.05em;font-size:12px}"
-            f".p2h-groups .lm-TabBar-tab.lm-mod-current,.p2h-groups .p-TabBar-tab.p-mod-current{{box-shadow:inset 0 -3px 0 {c['accent']}}}"
-            ".p2h-subtabs .lm-TabBar-tab,.p2h-subtabs .p-TabBar-tab{font-weight:400;text-transform:none;letter-spacing:0;font-size:13px}"
-            ".p2h-subtabs .lm-TabBar-tab.lm-mod-current,.p2h-subtabs .p-TabBar-tab.p-mod-current{box-shadow:none;font-weight:600}"
+            ".bp-topbar{gap:10px;flex-wrap:wrap;margin:2px 0 6px 0}"
+            f".bp-cluster{{padding:3px 8px 3px 4px;border:1px solid {c['border']};border-radius:8px;background:{c['field']};gap:4px}}"
+            ".bp-groups .lm-TabBar-tab,.bp-groups .p-TabBar-tab{font-weight:600;text-transform:uppercase;letter-spacing:.05em;font-size:12px}"
+            f".bp-groups .lm-TabBar-tab.lm-mod-current,.bp-groups .p-TabBar-tab.p-mod-current{{box-shadow:inset 0 -3px 0 {c['accent']}}}"
+            ".bp-subtabs .lm-TabBar-tab,.bp-subtabs .p-TabBar-tab{font-weight:400;text-transform:none;letter-spacing:0;font-size:13px}"
+            ".bp-subtabs .lm-TabBar-tab.lm-mod-current,.bp-subtabs .p-TabBar-tab.p-mod-current{box-shadow:none;font-weight:600}"
             "</style>"
         )
 
@@ -152,7 +152,7 @@ class Explorer:
         layout/slices/style recipe, undo history, checkpoints) starts fresh, so the two
         cells can't step on each other::
 
-            explorer = p2h.explore(df)                 # cell 1: explore freely
+            explorer = bp.explore(df)                 # cell 1: explore freely
             cell2 = explorer.clone()                    # cell 2: same data, no re-profiling
             cell2.w_rows.value = ("dst_port",)           # diverges independently
 
@@ -197,7 +197,7 @@ class Explorer:
 
         ::
 
-            explorer = p2h.explore(df)
+            explorer = bp.explore(df)
             # ... adjust rows/cols/slices/style until it looks right ...
             explorer.save_checkpoint("clean baseline, all traffic")
             # ... slice down to a suspicious host, try a few things ...
@@ -1033,10 +1033,10 @@ class Explorer:
             self._cluster("layout", self.w_best, self.w_suggest_btn, self.w_suggest),
             self._cluster("history", self.w_undo, self.w_reset),
         ])
-        self.top.add_class("p2h-topbar")
-        self.tabs.add_class("p2h-groups")
+        self.top.add_class("bp-topbar")
+        self.tabs.add_class("bp-groups")
         for inner in outer:
-            inner.add_class("p2h-subtabs")
+            inner.add_class("bp-subtabs")
         self.w_css = W.HTML(self._chrome_css())
         self.box = W.VBox([self.w_css, self.top, self.tabs, self.w_status, self.w_out, W.HTML("<b style='font-size:11px;color:#666'>log</b>"), self.w_log])
         self._refresh_data_tab()
@@ -1272,12 +1272,12 @@ class Explorer:
         for f in ("max_rows", "max_cols", "layers", "bins", "scale", "order", "variants"):
             if getattr(self.options, f) != getattr(d, f):
                 opts[f] = getattr(self.options, f)
-        lines = ["import bts_pivot as p2h", ""]
+        lines = ["import bts_pivot as bp", ""]
         src = "df"
         if self.reduce["sample"]:
             src = f"df.sample({self.reduce['sample']}, random_state=0)"
         args = ", ".join(x for x in (src, _kw(spec), _kw(opts)) if x)
-        lines.append(f"v = p2h.fit({args})")
+        lines.append(f"v = bp.fit({args})")
         for kind, payload in self.slices:
             if kind == "slice":
                 lines.append(f"v = v.slice({_kw(payload)})")
@@ -1294,7 +1294,7 @@ class Explorer:
         if self.mode == CHAINS:
             c = {k: x for k, x in self.chain.items() if x}
             state = c.pop("state", None)
-            lines.append(f"v = p2h.chains(v.data, {state!r}{', ' if c else ''}{_kw(c)})")
+            lines.append(f"v = bp.chains(v.data, {state!r}{', ' if c else ''}{_kw(c)})")
         if self.reduce["cluster"] is not None:
             k = self.reduce["cluster"]
             kw = {"on": self.reduce["cluster_on"]} if self.reduce["cluster_on"] else {}
@@ -1664,16 +1664,16 @@ class Explorer:
             if name in ("VBox", "HBox", "Box"):
                 direction = "column" if name == "VBox" else "row"
                 inner = "".join(render(x) for x in w.children)
-                if "p2h-cluster" in classes:
+                if "bp-cluster" in classes:
                     return (
                         f"<div style='display:inline-flex;align-items:center;gap:4px;padding:3px 8px 3px 4px;border:1px solid {c['border']};"
                         f"border-radius:8px;background:{c['field']};margin:2px 0'>{inner}</div>"
                     )
-                gap = "10px" if "p2h-topbar" in classes else "6px"
+                gap = "10px" if "bp-topbar" in classes else "6px"
                 return f"<div style='display:flex;flex-direction:{direction};flex-wrap:wrap;gap:{gap};align-items:flex-start;margin:2px 0'>{inner}</div>"
             if name == "Tab":
                 tab = w.selected_index or 0
-                section = "p2h-groups" in classes  # the outer, grouping tabs read as sections
+                section = "bp-groups" in classes  # the outer, grouping tabs read as sections
                 heads = "".join(
                     f"<span style='padding:5px 12px;border:1px solid {c['border']};border-bottom:{'none' if i == tab else '1px solid ' + c['border']};"
                     f"border-radius:8px 8px 0 0;background:{c['panel'] if i == tab else c['bg']};color:{c['text']};"

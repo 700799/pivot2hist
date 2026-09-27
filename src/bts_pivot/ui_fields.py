@@ -176,19 +176,19 @@ def chip_html(f: Dict[str, Any], *, removable: bool = False, drag: bool = True, 
     title = _html.escape(f"{f['name']}: {kind}; {f['count']:,} non-null, {f['distinct']:,} distinct (variety {f['variety']:.2%}), nulls {f['nulls']:.1%}; e.g. {f.get('examples', '')}")
     if mark:
         title += _html.escape(f" — marked {mark}")
-    x = "<span class='p2h-x' title='remove'>×</span>" if removable else ""
+    x = "<span class='bp-x' title='remove'>×</span>" if removable else ""
     mark_style = f"border-left:4px solid {_html.escape(mark)};box-shadow:0 0 0 1px {_html.escape(mark)} inset" if mark else ""
     glyph = glyph_svg(f.get("glyph"), f.get("glyph_kind"), color=color)
     glyph_title = " title='value distribution'" if f.get("glyph_kind") == "hist" else (" title='row count over time'" if f.get("glyph_kind") == "trend" else "")
     return (
-        f"<div class='p2h-chip' draggable='{'true' if drag else 'false'}' data-name='{_html.escape(f['name'])}' title='{title}' style='{mark_style}'>"
-        f"<span class='p2h-dot' style='background:{color}'></span>"
-        f"<span class='p2h-name'>{_html.escape(f['name'])}</span>"
-        f"<span class='p2h-kind'>{_html.escape(kind)}</span>"
-        f"<span class='p2h-stat' title='non-null count'>n {_fmt_n(f['count'])}</span>"
-        f"<span class='p2h-stat' title='distinct values'>≠ {_fmt_n(f['distinct'])}</span>"
-        f"<span class='p2h-var' title='variety: distinct / rows'><span style='width:{pct}%'></span></span>"
-        f"<span class='p2h-glyph'{glyph_title}>{glyph}</span>{x}</div>"
+        f"<div class='bp-chip' draggable='{'true' if drag else 'false'}' data-name='{_html.escape(f['name'])}' title='{title}' style='{mark_style}'>"
+        f"<span class='bp-dot' style='background:{color}'></span>"
+        f"<span class='bp-name'>{_html.escape(f['name'])}</span>"
+        f"<span class='bp-kind'>{_html.escape(kind)}</span>"
+        f"<span class='bp-stat' title='non-null count'>n {_fmt_n(f['count'])}</span>"
+        f"<span class='bp-stat' title='distinct values'>≠ {_fmt_n(f['distinct'])}</span>"
+        f"<span class='bp-var' title='variety: distinct / rows'><span style='width:{pct}%'></span></span>"
+        f"<span class='bp-glyph'{glyph_title}>{glyph}</span>{x}</div>"
     )
 
 
@@ -203,23 +203,23 @@ def zones_html(fields: List[Dict[str, Any]], zones: Dict[str, List[str]], *, int
     for z in ZONES:
         chips = "".join(chip_html(by[n], removable=interactive, drag=interactive, mark=marks.get(n)) for n in zones.get(z, []) if n in by)
         hint = {"rows": "drag fields here: rows within rows", "cols": "columns within columns", "values": "measure (count when empty)", "slicers": "filter fields"}[z]
-        body = chips if chips else f"<span class='p2h-hint'>{hint}</span>"
+        body = chips if chips else f"<span class='bp-hint'>{hint}</span>"
         zone_blocks.append(
-            f"<div class='p2h-zone' data-zone='{z}'><div class='p2h-zone-title'>{ZONE_TITLES[z]}</div>"
-            f"<div class='p2h-zone-body'>{body}</div></div>"
+            f"<div class='bp-zone' data-zone='{z}'><div class='bp-zone-title'>{ZONE_TITLES[z]}</div>"
+            f"<div class='bp-zone-body'>{body}</div></div>"
         )
-    css = theme_style_block(theme, selector=".p2h-fields-scope") + f"<style>{FIELDS_CSS}</style>"
+    css = theme_style_block(theme, selector=".bp-fields-scope") + f"<style>{FIELDS_CSS}</style>"
     return (
-        f"<div class='p2h-fields-scope' style='background:var(--p2h-bg,#fff);padding:8px;border-radius:12px'>{css}"
-        "<div class='p2h-fields'>"
-        "<div class='p2h-pool'><div class='p2h-zone-title'>Fields <input class='p2h-search' placeholder='search'/></div>"
-        f"<div class='p2h-pool-body'>{pool}</div></div>"
-        f"<div class='p2h-zones'>{''.join(zone_blocks)}</div></div></div>"
+        f"<div class='bp-fields-scope' style='background:var(--bp-bg,#fff);padding:8px;border-radius:12px'>{css}"
+        "<div class='bp-fields'>"
+        "<div class='bp-pool'><div class='bp-zone-title'>Fields <input class='bp-search' placeholder='search'/></div>"
+        f"<div class='bp-pool-body'>{pool}</div></div>"
+        f"<div class='bp-zones'>{''.join(zone_blocks)}</div></div></div>"
     )
 
 
 #: CSS custom properties per theme; :func:`theme_style_block` emits one as a scoped
-#: ``<style>`` block so the field list (and anything else using the same ``--p2h-*``
+#: ``<style>`` block so the field list (and anything else using the same ``--bp-*``
 #: tokens) can switch between the light, graphite and gunmetal looks without editing markup.
 FIELD_THEMES = {
     "light": {
@@ -241,35 +241,35 @@ FIELD_THEMES = {
 
 
 def theme_style_block(theme: str = "light", *, selector: str = ":root") -> str:
-    """A ``<style>`` block defining the ``--p2h-*`` custom properties for ``theme``."""
+    """A ``<style>`` block defining the ``--bp-*`` custom properties for ``theme``."""
     vars_ = FIELD_THEMES.get(theme, FIELD_THEMES["light"])
-    decls = ";".join(f"--p2h-{k}:{v}" for k, v in vars_.items())
+    decls = ";".join(f"--bp-{k}:{v}" for k, v in vars_.items())
     return f"<style>{selector}{{{decls}}}</style>"
 
 
 FIELDS_CSS = """
-.p2h-fields{display:flex;gap:10px;align-items:stretch;font-size:12px}
-.p2h-pool{flex:0 0 250px;display:flex;flex-direction:column;min-height:120px}
-.p2h-pool-body{overflow-y:auto;max-height:330px;display:flex;flex-direction:column;gap:4px;padding:6px;border:1px dashed var(--p2h-border,#cfd6df);border-radius:10px;background:var(--p2h-panel,#fbfcfd)}
-.p2h-zones{flex:1;display:grid;grid-template-columns:1fr 1fr;gap:8px}
-.p2h-zone{display:flex;flex-direction:column;min-height:60px}
-.p2h-zone-title{font-weight:600;color:var(--p2h-muted,#556);margin:0 0 4px 2px;display:flex;justify-content:space-between;align-items:center}
-.p2h-zone-body{flex:1;display:flex;flex-direction:column;gap:4px;padding:6px;border:1px dashed var(--p2h-border,#cfd6df);border-radius:10px;background:var(--p2h-panel,#fbfcfd);min-height:40px;transition:border-color .12s,background .12s}
-.p2h-zone-body.p2h-over,.p2h-pool-body.p2h-over{border-color:var(--p2h-accent,#0072B2);background:var(--p2h-accent-soft,#e8f1fa)}
-.p2h-hint{color:var(--p2h-hint,#99a);font-style:italic;padding:2px 4px}
-.p2h-chip{display:grid;grid-template-columns:8px minmax(70px,1.4fr) minmax(60px,1fr) auto auto 46px 42px auto;gap:6px;align-items:center;padding:4px 8px;border-radius:8px;background:var(--p2h-chip,#fff);color:var(--p2h-text,#1f2937);border:1px solid var(--p2h-border,#dfe4ea);cursor:grab;box-shadow:0 1px 2px rgba(0,0,0,.06);transition:box-shadow .12s,transform .12s}
-.p2h-chip:hover{box-shadow:0 2px 6px rgba(0,0,0,.12)}
-.p2h-chip.p2h-dragging{opacity:.5}
-.p2h-dot{width:8px;height:8px;border-radius:50%}
-.p2h-name{font-weight:600;color:var(--p2h-text,#1f2937);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.p2h-kind{color:var(--p2h-muted,#667);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:11px}
-.p2h-stat{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;color:var(--p2h-muted,#556);white-space:nowrap}
-.p2h-var{display:inline-block;height:6px;background:var(--p2h-var-track,#e5eaf0);border-radius:3px;overflow:hidden}
-.p2h-var span{display:block;height:6px;background:linear-gradient(90deg,#56B4E9,var(--p2h-accent,#0072B2))}
-.p2h-glyph{display:flex;align-items:center;height:14px;opacity:.9}
-.p2h-glyph:empty{visibility:hidden}
-.p2h-x{cursor:pointer;color:var(--p2h-hint,#99a);font-weight:700;padding:0 2px}.p2h-x:hover{color:var(--p2h-danger,#c00)}
-.p2h-search{font-size:11px;padding:3px 8px;border:1px solid var(--p2h-border,#dfe4ea);border-radius:8px;width:110px;background:var(--p2h-bg,#fff);color:var(--p2h-text,#1f2937)}
+.bp-fields{display:flex;gap:10px;align-items:stretch;font-size:12px}
+.bp-pool{flex:0 0 250px;display:flex;flex-direction:column;min-height:120px}
+.bp-pool-body{overflow-y:auto;max-height:330px;display:flex;flex-direction:column;gap:4px;padding:6px;border:1px dashed var(--bp-border,#cfd6df);border-radius:10px;background:var(--bp-panel,#fbfcfd)}
+.bp-zones{flex:1;display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.bp-zone{display:flex;flex-direction:column;min-height:60px}
+.bp-zone-title{font-weight:600;color:var(--bp-muted,#556);margin:0 0 4px 2px;display:flex;justify-content:space-between;align-items:center}
+.bp-zone-body{flex:1;display:flex;flex-direction:column;gap:4px;padding:6px;border:1px dashed var(--bp-border,#cfd6df);border-radius:10px;background:var(--bp-panel,#fbfcfd);min-height:40px;transition:border-color .12s,background .12s}
+.bp-zone-body.bp-over,.bp-pool-body.bp-over{border-color:var(--bp-accent,#0072B2);background:var(--bp-accent-soft,#e8f1fa)}
+.bp-hint{color:var(--bp-hint,#99a);font-style:italic;padding:2px 4px}
+.bp-chip{display:grid;grid-template-columns:8px minmax(70px,1.4fr) minmax(60px,1fr) auto auto 46px 42px auto;gap:6px;align-items:center;padding:4px 8px;border-radius:8px;background:var(--bp-chip,#fff);color:var(--bp-text,#1f2937);border:1px solid var(--bp-border,#dfe4ea);cursor:grab;box-shadow:0 1px 2px rgba(0,0,0,.06);transition:box-shadow .12s,transform .12s}
+.bp-chip:hover{box-shadow:0 2px 6px rgba(0,0,0,.12)}
+.bp-chip.bp-dragging{opacity:.5}
+.bp-dot{width:8px;height:8px;border-radius:50%}
+.bp-name{font-weight:600;color:var(--bp-text,#1f2937);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bp-kind{color:var(--bp-muted,#667);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:11px}
+.bp-stat{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;color:var(--bp-muted,#556);white-space:nowrap}
+.bp-var{display:inline-block;height:6px;background:var(--bp-var-track,#e5eaf0);border-radius:3px;overflow:hidden}
+.bp-var span{display:block;height:6px;background:linear-gradient(90deg,#56B4E9,var(--bp-accent,#0072B2))}
+.bp-glyph{display:flex;align-items:center;height:14px;opacity:.9}
+.bp-glyph:empty{visibility:hidden}
+.bp-x{cursor:pointer;color:var(--bp-hint,#99a);font-weight:700;padding:0 2px}.bp-x:hover{color:var(--bp-danger,#c00)}
+.bp-search{font-size:11px;padding:3px 8px;border:1px solid var(--bp-border,#dfe4ea);border-radius:8px;width:110px;background:var(--bp-bg,#fff);color:var(--bp-text,#1f2937)}
 """
 
 _ESM = r"""
@@ -280,8 +280,8 @@ const THEME_VARS = {
 };
 function applyTheme(el, theme) {
   const vars = THEME_VARS[theme] || THEME_VARS.light;
-  for (const [k, v] of Object.entries(vars)) el.style.setProperty(`--p2h-${k}`, v);
-  el.style.background = "var(--p2h-bg)";
+  for (const [k, v] of Object.entries(vars)) el.style.setProperty(`--bp-${k}`, v);
+  el.style.background = "var(--bp-bg)";
   el.style.borderRadius = "12px";
   el.style.padding = "8px";
 }
@@ -319,18 +319,18 @@ function render({ model, el }) {
   }
   function chip(f, removable) {
     const d = document.createElement("div");
-    d.className = "p2h-chip"; d.draggable = true; d.dataset.name = f.name;
+    d.className = "bp-chip"; d.draggable = true; d.dataset.name = f.name;
     const kind = f.kind + (f.semantic ? " · " + f.semantic : "") + (f.ts ? " · " + f.ts : "");
     const pct = f.distinct > 1 ? Math.max(2, Math.min(100, Math.round(f.variety * 100))) : 2;
     const mark = (model.get("marks") || {})[f.name];
     if (mark) { d.style.borderLeft = `4px solid ${mark}`; d.style.boxShadow = `0 0 0 1px ${mark} inset`; }
     d.title = `${f.name}: ${kind}; ${f.count.toLocaleString()} non-null, ${f.distinct.toLocaleString()} distinct (variety ${(f.variety * 100).toFixed(2)}%), nulls ${(f.nulls * 100).toFixed(1)}%; e.g. ${f.examples || ""}` + (mark ? ` — marked (click the dot to cycle/clear)` : ` — click the dot to highlight`);
     const glyphTitle = f.glyph_kind === "hist" ? "value distribution" : f.glyph_kind === "trend" ? "row count over time" : "";
-    d.innerHTML = `<span class='p2h-dot' style='background:${COLORS[f.kind] || "#888"};cursor:pointer' title='click to highlight'></span><span class='p2h-name'>${esc(f.name)}</span><span class='p2h-kind'>${esc(kind)}</span><span class='p2h-stat'>n ${fmt(f.count)}</span><span class='p2h-stat'>≠ ${fmt(f.distinct)}</span><span class='p2h-var'><span style='width:${pct}%'></span></span><span class='p2h-glyph' title='${esc(glyphTitle)}'>${glyphSvg(f.glyph, f.glyph_kind, COLORS[f.kind] || "#888")}</span>${removable ? "<span class='p2h-x' title='remove'>×</span>" : ""}`;
-    d.addEventListener("dragstart", (e) => { e.dataTransfer.setData("text/plain", f.name); e.dataTransfer.effectAllowed = "move"; d.classList.add("p2h-dragging"); });
-    d.addEventListener("dragend", () => d.classList.remove("p2h-dragging"));
-    d.querySelector(".p2h-dot").addEventListener("click", (e) => { e.stopPropagation(); cycleMark(f.name); });
-    if (removable) d.querySelector(".p2h-x").addEventListener("click", () => { removeEverywhere(f.name); commit(); });
+    d.innerHTML = `<span class='bp-dot' style='background:${COLORS[f.kind] || "#888"};cursor:pointer' title='click to highlight'></span><span class='bp-name'>${esc(f.name)}</span><span class='bp-kind'>${esc(kind)}</span><span class='bp-stat'>n ${fmt(f.count)}</span><span class='bp-stat'>≠ ${fmt(f.distinct)}</span><span class='bp-var'><span style='width:${pct}%'></span></span><span class='bp-glyph' title='${esc(glyphTitle)}'>${glyphSvg(f.glyph, f.glyph_kind, COLORS[f.kind] || "#888")}</span>${removable ? "<span class='bp-x' title='remove'>×</span>" : ""}`;
+    d.addEventListener("dragstart", (e) => { e.dataTransfer.setData("text/plain", f.name); e.dataTransfer.effectAllowed = "move"; d.classList.add("bp-dragging"); });
+    d.addEventListener("dragend", () => d.classList.remove("bp-dragging"));
+    d.querySelector(".bp-dot").addEventListener("click", (e) => { e.stopPropagation(); cycleMark(f.name); });
+    if (removable) d.querySelector(".bp-x").addEventListener("click", () => { removeEverywhere(f.name); commit(); });
     return d;
   }
   function state() { const s = {}; for (const z of ZONES) s[z] = [...(model.get(z) || [])]; return s; }
@@ -346,12 +346,12 @@ function render({ model, el }) {
     model.set(zone, arr);
   }
   function wireZone(body, zone) {
-    body.addEventListener("dragover", (e) => { e.preventDefault(); body.classList.add("p2h-over"); e.dataTransfer.dropEffect = "move"; });
-    body.addEventListener("dragleave", () => body.classList.remove("p2h-over"));
+    body.addEventListener("dragover", (e) => { e.preventDefault(); body.classList.add("bp-over"); e.dataTransfer.dropEffect = "move"; });
+    body.addEventListener("dragleave", () => body.classList.remove("bp-over"));
     body.addEventListener("drop", (e) => {
-      e.preventDefault(); body.classList.remove("p2h-over");
+      e.preventDefault(); body.classList.remove("bp-over");
       const name = e.dataTransfer.getData("text/plain"); if (!name) return;
-      const target = e.target.closest(".p2h-chip");
+      const target = e.target.closest(".bp-chip");
       const before = target && target.dataset.name !== name ? target.dataset.name : null;
       dropInto(zone, name, before); commit();
     });
@@ -363,19 +363,19 @@ function render({ model, el }) {
     const s = state();
     const used = new Set(ZONES.flatMap((z) => s[z]));
     el.innerHTML = "";
-    const root = document.createElement("div"); root.className = "p2h-fields";
-    const pool = document.createElement("div"); pool.className = "p2h-pool";
-    pool.innerHTML = `<div class='p2h-zone-title'>Fields <input class='p2h-search' placeholder='search' value='${esc(search)}'/></div>`;
-    const poolBody = document.createElement("div"); poolBody.className = "p2h-pool-body";
+    const root = document.createElement("div"); root.className = "bp-fields";
+    const pool = document.createElement("div"); pool.className = "bp-pool";
+    pool.innerHTML = `<div class='bp-zone-title'>Fields <input class='bp-search' placeholder='search' value='${esc(search)}'/></div>`;
+    const poolBody = document.createElement("div"); poolBody.className = "bp-pool-body";
     for (const f of fields) if (!used.has(f.name) && f.name.toLowerCase().includes(search.toLowerCase())) poolBody.appendChild(chip(f, false));
     wireZone(poolBody, "pool"); pool.appendChild(poolBody); root.appendChild(pool);
-    pool.querySelector(".p2h-search").addEventListener("input", (e) => { search = e.target.value; draw(); pool.querySelector(".p2h-search").focus(); });
-    const zones = document.createElement("div"); zones.className = "p2h-zones";
+    pool.querySelector(".bp-search").addEventListener("input", (e) => { search = e.target.value; draw(); pool.querySelector(".bp-search").focus(); });
+    const zones = document.createElement("div"); zones.className = "bp-zones";
     for (const z of ZONES) {
-      const zone = document.createElement("div"); zone.className = "p2h-zone"; zone.dataset.zone = z;
-      zone.innerHTML = `<div class='p2h-zone-title'>${TITLES[z]}</div>`;
-      const body = document.createElement("div"); body.className = "p2h-zone-body";
-      if (!s[z].length) body.innerHTML = `<span class='p2h-hint'>${HINTS[z]}</span>`;
+      const zone = document.createElement("div"); zone.className = "bp-zone"; zone.dataset.zone = z;
+      zone.innerHTML = `<div class='bp-zone-title'>${TITLES[z]}</div>`;
+      const body = document.createElement("div"); body.className = "bp-zone-body";
+      if (!s[z].length) body.innerHTML = `<span class='bp-hint'>${HINTS[z]}</span>`;
       for (const n of s[z]) if (by[n]) body.appendChild(chip(by[n], true));
       wireZone(body, z); zone.appendChild(body); zones.appendChild(zone);
     }
@@ -533,7 +533,7 @@ class FieldListFallback(W.VBox):
                 down.on_click(lambda _, z=z, n=name: self._shift(z, n, +1))
                 rm.on_click(lambda _, n=name: self.move(n, None))
                 mark.observe(lambda ch, n=name: self.paint(n, ch["new"]) if ch["new"] != "__unset__" else None, names="value")
-                preview = theme_style_block(self.theme, selector=".p2h-fb-chip") + f"<style>{FIELDS_CSS}</style><div class='p2h-fb-chip'>{chip_html(f, drag=False, mark=self.marks.get(name))}</div>"
+                preview = theme_style_block(self.theme, selector=".bp-fb-chip") + f"<style>{FIELDS_CSS}</style><div class='bp-fb-chip'>{chip_html(f, drag=False, mark=self.marks.get(name))}</div>"
                 rows.append(W.HBox([W.HTML(preview), mark, up, down, rm]))
             self._boxes[z].children = rows or [W.HTML("<span style='color:#99a;font-style:italic'>empty</span>")]
 

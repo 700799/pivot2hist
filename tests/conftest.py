@@ -1,14 +1,14 @@
 import pandas as pd
 import pytest
 
-import bts_pivot as p2h
+import bts_pivot as bp
 
 
 @pytest.fixture(scope="session")
 def fw() -> pd.DataFrame:
-    return p2h.sample.firewall_logs(3000, seed=0)
+    return bp.sample.firewall_logs(3000, seed=0)
 
 
 @pytest.fixture(scope="session")
 def auth() -> pd.DataFrame:
-    return p2h.sample.auth_logs(1500, seed=1)
+    return bp.sample.auth_logs(1500, seed=1)

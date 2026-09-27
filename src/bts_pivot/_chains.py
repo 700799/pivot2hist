@@ -7,8 +7,8 @@ gets the whole toolkit: heatmap, toggle, slicing, clustering.
 
 ::
 
-    v = p2h.chains(df, "event", by="user", time="timestamp")   # View: from x to
-    p2h.sequences(df, "event", by="user", time="timestamp", length=3)
+    v = bp.chains(df, "event", by="user", time="timestamp")   # View: from x to
+    bp.sequences(df, "event", by="user", time="timestamp", length=3)
 """
 from __future__ import annotations
 

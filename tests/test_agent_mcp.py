@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-import bts_pivot as p2h
+import bts_pivot as bp
 from bts_pivot import agent
 
 
@@ -11,10 +11,10 @@ def _assert_json_safe(obj):
 
 
 def test_columns_kwarg_honored_for_frames(fw):
-    v = p2h.fit(fw, columns=["action", "bytes", "dst_port"], agg="count")
+    v = bp.fit(fw, columns=["action", "bytes", "dst_port"], agg="count")
     assert sorted(v.data.columns) == ["action", "bytes", "dst_port"]
     with pytest.raises(KeyError):
-        p2h.fit(fw, columns=["nope"])
+        bp.fit(fw, columns=["nope"])
 
 
 def test_agent_describe(fw):
@@ -218,7 +218,7 @@ def test_agent_describe_distributions(fw):
     _assert_json_safe(d)
     bytes_col = next(c for c in d["columns"] if c["name"] == "bytes")
     assert bytes_col["distribution"] is not None
-    assert bytes_col["distribution"]["family"] in p2h.DIST_FAMILIES
+    assert bytes_col["distribution"]["family"] in bp.DIST_FAMILIES
     assert isinstance(bytes_col["distribution"]["params"], dict)
     non_numeric = next(c for c in d["columns"] if c["name"] == "action")
     assert "distribution" not in non_numeric
@@ -261,7 +261,7 @@ def test_mcp_anomalies_and_distributions_tools(mcp_server_module, tmp_path, fw):
     assert len(d1["cells"]) == 3
     d2 = json.loads(r2.content[0].text)
     bytes_col = next(c for c in d2["columns"] if c["name"] == "bytes")
-    assert bytes_col["distribution"]["family"] in p2h.DIST_FAMILIES
+    assert bytes_col["distribution"]["family"] in bp.DIST_FAMILIES
 
 
 def test_agent_compare_split_vs_rest(fw):

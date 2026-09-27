@@ -326,7 +326,7 @@ class View:
         cells that each explore a different layout, without re-reading the source or
         duplicating it in RAM::
 
-            base = p2h.fit("huge.parquet")   # surveyed, profiled, fitted once
+            base = bp.fit("huge.parquet")   # surveyed, profiled, fitted once
             a = base.clone().slice(action="deny").style(theme="graphite")
             b = base.clone().histogram("bytes")
             # `a` and `b` share the same underlying data; neither's cache or

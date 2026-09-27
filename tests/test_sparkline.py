@@ -1,13 +1,13 @@
 import pandas as pd
 import pytest
 
-import bts_pivot as p2h
+import bts_pivot as bp
 from bts_pivot import sparkline_table
 
 
 @pytest.fixture(scope="module")
 def v(fw):
-    return p2h.fit(fw, max_rows=10, max_cols=4)  # sum(bytes) by dst_port (top N) x severity/action
+    return bp.fit(fw, max_rows=10, max_cols=4)  # sum(bytes) by dst_port (top N) x severity/action
 
 
 # --------------------------------------------------------------------------- data
@@ -24,48 +24,48 @@ def test_sparkline_table_matches_pivot_row_totals(v, fw):
 
 
 def test_sparkline_table_count_layout_exact(fw):
-    v = p2h.fit(fw, rows=["action"], cols=[], agg="count")
+    v = bp.fit(fw, rows=["action"], cols=[], agg="count")
     table, cats = sparkline_table(v, "timestamp")
     assert table.sum(axis=1).tolist() == v.pivot()["count"].tolist()
     assert table.to_numpy().min() >= 0  # counts fill 0, never negative/NaN
 
 
 def test_sparkline_table_hist_mode(v, fw):
-    h = p2h.fit(fw).histogram("bytes")
+    h = bp.fit(fw).histogram("bytes")
     table, cats = sparkline_table(h, "timestamp")
     assert list(table.index) == list(h.table().index)
     assert table.sum(axis=1).sum() == pytest.approx(len(fw))
 
 
 def test_sparkline_table_nonadditive_agg_fills_nan(fw):
-    v = p2h.fit(fw, rows=["dst_port"], cols=[], values="bytes", agg="mean", max_rows=8)
+    v = bp.fit(fw, rows=["dst_port"], cols=[], values="bytes", agg="mean", max_rows=8)
     table, cats = sparkline_table(v, "timestamp")
     assert table.isna().to_numpy().any() or table.notna().all(axis=None)  # some buckets legitimately empty per row
 
 
 def test_sparkline_table_nested_rows(fw):
-    v = p2h.fit(fw, rows=["protocol", "action"], cols=["severity"], agg="count", max_rows=20)
+    v = bp.fit(fw, rows=["protocol", "action"], cols=["severity"], agg="count", max_rows=20)
     table, cats = sparkline_table(v, "timestamp")
     assert isinstance(table.index, pd.MultiIndex) and list(table.index) == list(v.pivot().index)
 
 
 def test_sparkline_table_degenerate_single_bucket(fw):
     df = fw.assign(timestamp=pd.Timestamp("2026-01-01 00:00:30"))
-    v = p2h.fit(df, rows=["action"], cols=[])
+    v = bp.fit(df, rows=["action"], cols=[])
     table, cats = sparkline_table(v, "timestamp")
     assert len(cats) == 1 and table.shape[1] == 1
 
 
 def test_sparkline_table_errors(v, fw):
     with pytest.raises(ValueError, match="row dimension"):
-        sparkline_table(p2h.fit(fw, rows=[], cols=["action"], agg="count"), "timestamp")
+        sparkline_table(bp.fit(fw, rows=[], cols=["action"], agg="count"), "timestamp")
     with pytest.raises(KeyError, match="nope"):
         sparkline_table(v, "nope")
     with pytest.raises(ValueError, match="no usable datetime"):
         sparkline_table(v, "action")
     all_null = fw.assign(timestamp=pd.NaT)
     with pytest.raises(ValueError, match="no usable datetime"):
-        sparkline_table(p2h.fit(all_null, rows=["action"], cols=[]), "timestamp")
+        sparkline_table(bp.fit(all_null, rows=["action"], cols=[]), "timestamp")
 
 
 def test_view_sparklines_method(v):
@@ -94,14 +94,14 @@ def test_style_sparklines_none_renders_nothing(v):
 
 
 def test_style_sparklines_combines_with_totals_bars_subtotals(fw):
-    v = p2h.fit(fw, rows=["protocol", "action"], cols=["severity"], agg="count", max_rows=20)
+    v = bp.fit(fw, rows=["protocol", "action"], cols=["severity"], agg="count", max_rows=20)
     html = v.style(sparklines="timestamp", totals=True, subtotals=True, bars=True).html()
     assert html.count("<svg") == len(v.pivot())  # one per data row, none for Σ/total rows
     assert ">trend<" in html and ">total<" in html
 
 
 def test_style_sparklines_overrides_outline(fw):
-    v = p2h.fit(fw, rows=["protocol", "action"], cols=["severity"], agg="count", max_rows=20)
+    v = bp.fit(fw, rows=["protocol", "action"], cols=["severity"], agg="count", max_rows=20)
     html = v.style(sparklines="timestamp", outline=True).html()
     assert "<details" not in html and "<svg" in html
 
@@ -122,13 +122,13 @@ def test_style_sparklines_max_rows_truncation_stays_aligned(v):
 
 
 def test_style_sparklines_row_with_no_data_shows_placeholder(fw):
-    v = p2h.fit(fw, rows=["dst_port"], cols=[], values="bytes", agg="mean", max_rows=40)
+    v = bp.fit(fw, rows=["dst_port"], cols=[], values="bytes", agg="mean", max_rows=40)
     html = v.style(sparklines="timestamp").html()
     assert "no data in this window" in html or html.count("<svg") == len(v.pivot())
 
 
 def test_style_sparklines_hist_mode(fw):
-    h = p2h.fit(fw).histogram("bytes")
+    h = bp.fit(fw).histogram("bytes")
     html = h.style(sparklines="timestamp").html()
     assert "<svg" in html and html.count("<svg") <= len(h.bins())
 
@@ -140,6 +140,6 @@ def test_style_sparklines_hist_mode(fw):
     (lambda: pd.DataFrame({"g": ["x"] * 100, "t": pd.to_datetime(["2026-01-01"] * 50 + [None] * 50)}), "t"),
 ])
 def test_sparkline_does_not_crash_on_adversarial_input(df_fn, time_col):
-    v = p2h.fit(df_fn(), rows=["g"], cols=[])
+    v = bp.fit(df_fn(), rows=["g"], cols=[])
     table, cats = sparkline_table(v, time_col)
     v.style(sparklines=time_col).html()

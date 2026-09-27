@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import bts_pivot as p2h
+import bts_pivot as bp
 from bts_pivot import agent
 from bts_pivot._novelty import COLUMNS, default_entity_columns, split_point
 
@@ -27,7 +27,7 @@ def novel_df(fw):
 
 @pytest.fixture(scope="module")
 def v(novel_df):
-    return p2h.fit(novel_df)
+    return bp.fit(novel_df)
 
 
 def test_new_entity_and_new_value_lead(v, novel_df):
@@ -75,7 +75,7 @@ def test_fan_out(fw):
     burst["timestamp"] = pd.Timestamp("2026-03-07 12:00") + pd.to_timedelta(rng.uniform(0, 3600, 30), unit="s")
     burst["src_ip"] = quiet
     burst["dst_port"] = rng.choice(np.arange(40000, 40030), 30)
-    r = p2h.fit(pd.concat([fw, burst], ignore_index=True)).novel("src_ip", "dst_port", since="24h", n=50)
+    r = bp.fit(pd.concat([fw, burst], ignore_index=True)).novel("src_ip", "dst_port", since="24h", n=50)
     fan = r[(r["kind"] == "fan-out") & (r["entity"] == str(quiet))]
     assert len(fan) == 1 and fan.iloc[0]["after"] >= fan.iloc[0]["before"] * 2 and "fans out" in fan.iloc[0]["text"]
     assert fan.iloc[0]["before"] == spread[quiet]
@@ -108,7 +108,7 @@ def test_bad_arguments(v, fw):
     with pytest.raises(ValueError, match="different"):
         v.novel("src_ip", "src_ip")
     with pytest.raises(ValueError, match="no datetime"):
-        p2h.fit(fw.drop(columns=["timestamp"])).novel("src_ip")
+        bp.fit(fw.drop(columns=["timestamp"])).novel("src_ip")
     with pytest.raises(KeyError):
         v.novel("src_ip", time="nope")
 
@@ -122,14 +122,14 @@ def test_string_columns_survive_mixed_types(fw):
     df = fw.copy()
     df["dst_port"] = df["dst_port"].astype(object)
     df.loc[df.index[:5], "dst_port"] = "http"
-    r = p2h.fit(df).novel("src_ip", "dst_port", n=5)
+    r = bp.fit(df).novel("src_ip", "dst_port", n=5)
     assert list(r.columns) == COLUMNS
 
 
 def test_top_level_function(novel_df):
-    r = p2h.novel(novel_df, "src_ip", "dst_port", since="24h", n=2)
+    r = bp.novel(novel_df, "src_ip", "dst_port", since="24h", n=2)
     assert len(r) == 2 and "new entity" in set(r["kind"])
-    assert set(p2h.NOVELTY_KINDS) == {"new entity", "new pair", "new value", "fan-out"}
+    assert set(bp.NOVELTY_KINDS) == {"new entity", "new pair", "new value", "fan-out"}
 
 
 def test_insights_include_novelty(v):

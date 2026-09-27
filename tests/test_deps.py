@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import bts_pivot as p2h
+import bts_pivot as bp
 from bts_pivot._deps import dependency_pairs, mutual_info_matrix
 
 rng = np.random.default_rng(3)
@@ -72,10 +72,10 @@ def test_dependency_pairs_excludes_self_pairs(correlated):
     assert len(long) == n * (n - 1)
 
 
-def test_p2h_dependencies_returns_view_and_toggles():
-    auth = p2h.sample.auth_logs(3000, seed=1)
-    v = p2h.dependencies(auth)
-    assert isinstance(v, p2h.View)
+def test_bp_dependencies_returns_view_and_toggles():
+    auth = bp.sample.auth_logs(3000, seed=1)
+    v = bp.dependencies(auth)
+    assert isinstance(v, bp.View)
     t = v.pivot()
     assert t.shape[0] == t.shape[1]
     # the synthetic auth_logs mfa rate depends on method (sso vs others)
@@ -85,7 +85,7 @@ def test_p2h_dependencies_returns_view_and_toggles():
     assert "<svg" in v.svg()
 
 
-def test_p2h_dependencies_columns_arg():
-    auth = p2h.sample.auth_logs(1000, seed=1)
-    v = p2h.dependencies(auth, columns=["method", "mfa", "event"])
+def test_bp_dependencies_columns_arg():
+    auth = bp.sample.auth_logs(1000, seed=1)
+    v = bp.dependencies(auth, columns=["method", "mfa", "event"])
     assert set(v.pivot().index) == {"method", "mfa", "event"}

@@ -2,18 +2,18 @@
 
 Quick start::
 
-    import bts_pivot as p2h
+    import bts_pivot as bp
 
-    v = p2h.fit(df)               # auto-chooses rows/cols/measure to fit a 40x12 box
+    v = bp.fit(df)               # auto-chooses rows/cols/measure to fit a 40x12 box
     print(v)                      # pivot table
     print(v.toggle())             # the same data as a histogram
     print(v.slice(action="deny")) # sliced pivot
     print(v.histogram("bytes"))   # histogram of a specific column
     v.suggest()                   # alternative layouts
     v.cluster(4)                  # group similar rows
-    p2h.explore(df)               # Jupyter menus (ipywidgets)
-    p2h.fit("huge.parquet")       # surveyed, fitted on a sample, aggregated page by page
-    p2h.verbose(); p2h.stats(7)   # scrolling step log; the seven costliest steps
+    bp.explore(df)               # Jupyter menus (ipywidgets)
+    bp.fit("huge.parquet")       # surveyed, fitted on a sample, aggregated page by page
+    bp.verbose(); bp.stats(7)   # scrolling step log; the seven costliest steps
 """
 from __future__ import annotations
 
@@ -191,7 +191,7 @@ def llm_context(
     structured facts (schema, shape, slices, measure), and the table itself as a
     GitHub-flavored markdown string, truncated to ``max_rows`` x ``max_cols``.
 
-    Equivalent to ``p2h.fit(data, ...).llm_context(...)``; see :meth:`View.llm_context`
+    Equivalent to ``bp.fit(data, ...).llm_context(...)``; see :meth:`View.llm_context`
     for what each field means, and :func:`bts_pivot.agent.llm_context` for the same
     thing from the plain-JSON agent surface (a source path/records instead of a frame,
     optional ``filters``).
@@ -217,7 +217,7 @@ def insights(
     Gaussian-mixture modality check, skew, concentration, outliers, correlated column
     pairs, and the most surprising pivot cells - ranked findings, not a raw dump.
 
-    Equivalent to ``p2h.fit(data, ...).insights(...)``; see :meth:`View.insights` for
+    Equivalent to ``bp.fit(data, ...).insights(...)``; see :meth:`View.insights` for
     what ``sensitivity`` controls and why it isn't called "temperature".
     """
     v = fit(data, rows=rows, cols=cols, values=values, agg=agg, **opts)
@@ -242,7 +242,7 @@ def spikes(
     """Which rows of the (auto-fitted) table of ``data`` moved over time, when, and by how
     much against their own history: spikes, drops and step changes per row, scored
     against a seasonal, share-of-total or plain robust baseline of the row's other time
-    buckets. Equivalent to ``p2h.fit(data, ...).spikes(column, ...)``; see
+    buckets. Equivalent to ``bp.fit(data, ...).spikes(column, ...)``; see
     :meth:`View.spikes` for the columns returned and how the baseline is chosen.
     """
     v = fit(data, rows=rows, cols=cols, values=values, agg=agg, **opts)
@@ -262,7 +262,7 @@ def novel(
 ) -> pd.DataFrame:
     """What is new in the recent part of ``data``, per entity: entities never seen before
     the split, pairs an entity never made before, values nobody had used, and entities
-    whose fan-out jumped. Equivalent to ``p2h.fit(data, ...).novel(entity, attr, ...)``;
+    whose fan-out jumped. Equivalent to ``bp.fit(data, ...).novel(entity, attr, ...)``;
     see :meth:`View.novel` for ``since`` and the columns returned.
     """
     v = fit(data, **opts)
@@ -289,12 +289,12 @@ def compare(
 ) -> Comparison:
     """Two sides of ``data`` on one shared, auto-fitted layout, cell by cell::
 
-        p2h.compare(df, action="deny")                   # deny vs the rest, as lift
-        p2h.compare(df, "action", "deny", "allow")       # deny vs allow
-        p2h.compare(df, "bytes > 1000", metric="delta")  # a query vs its complement
-        p2h.compare("events.parquet", {"timestamp": "2026-03-02"}, {"timestamp": "2026-03-01"})
+        bp.compare(df, action="deny")                   # deny vs the rest, as lift
+        bp.compare(df, "action", "deny", "allow")       # deny vs allow
+        bp.compare(df, "bytes > 1000", metric="delta")  # a query vs its complement
+        bp.compare("events.parquet", {"timestamp": "2026-03-02"}, {"timestamp": "2026-03-01"})
 
-    Equivalent to ``p2h.fit(data, rows=..., ...).compare(...)``: keyword arguments that are
+    Equivalent to ``bp.fit(data, rows=..., ...).compare(...)``: keyword arguments that are
     fit options (``max_rows``, ``layers``, ``memory_budget_mb`` ...) go to the fit, any
     other ``column=value`` keyword is the split. See :meth:`View.compare` for the forms,
     the metrics, and why the layout is frozen across the two sides.
@@ -318,7 +318,7 @@ def facet(
 ) -> Facets:
     """Small multiples of ``data``: the auto-fitted pivot once per value of ``column``
     (the ``n`` most frequent, or ``levels``), all on one layout and one colour scale.
-    Equivalent to ``p2h.fit(data, ...).facet(column, n, levels=levels)``; see
+    Equivalent to ``bp.fit(data, ...).facet(column, n, levels=levels)``; see
     :meth:`View.facet`.
     """
     v = fit(data, rows=rows, cols=cols, values=values, agg=agg, **opts)
@@ -340,7 +340,7 @@ def prompt(
     """``data`` auto-fitted (or laid out as given) and packaged as one self-contained LLM
     prompt: the dataset's columns, the table, the surprising cells, optionally insights /
     a comparison / an explained cell, and ``question``. Equivalent to
-    ``p2h.fit(data, ...).prompt(question, ...)``; keyword arguments that are fit options
+    ``bp.fit(data, ...).prompt(question, ...)``; keyword arguments that are fit options
     go to the fit, the rest (``insights=``, ``compare=``, ``explain=``, ``anomalies=`` ...)
     to :meth:`View.prompt`. See there for what each section holds.
     """

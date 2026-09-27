@@ -3,7 +3,7 @@ import xml.dom.minidom
 import pandas as pd
 import pytest
 
-import bts_pivot as p2h
+import bts_pivot as bp
 from bts_pivot.ui_fields import (
     FIELD_THEMES,
     HAS_ANYWIDGET,
@@ -25,7 +25,7 @@ def _xml_fragment(s: str) -> None:
 
 @pytest.fixture(scope="module")
 def prof():
-    return p2h.profile(p2h.sample.firewall_logs(2000, seed=1))
+    return bp.profile(bp.sample.firewall_logs(2000, seed=1))
 
 
 def test_field_stats_shape_and_variety(prof):
@@ -43,8 +43,8 @@ def test_chip_html_escapes_and_marks_removable():
     f = {"name": "<x>", "kind": "categorical", "semantic": "", "count": 10, "distinct": 3, "variety": 0.3, "nulls": 0.0, "examples": "a, b", "ts": ""}
     h = chip_html(f, removable=True)
     _xml_fragment(h)
-    assert "&lt;x&gt;" in h and "p2h-x" in h
-    assert "p2h-x" not in chip_html(f, removable=False)
+    assert "&lt;x&gt;" in h and "bp-x" in h
+    assert "bp-x" not in chip_html(f, removable=False)
 
 
 def test_zones_html_light_and_graphite(prof):
@@ -57,12 +57,12 @@ def test_zones_html_light_and_graphite(prof):
     assert light != dark and "#161a20" in dark and "#161a20" not in light
     assert "src_ip" in light and "action" in light and "bytes" in light
     non_interactive = zones_html(fields, zones, interactive=False)
-    assert "class='p2h-x'" not in non_interactive  # the CSS rule for the class is still emitted; only the chip markup is gone
+    assert "class='bp-x'" not in non_interactive  # the CSS rule for the class is still emitted; only the chip markup is gone
 
 
 def test_theme_style_block():
     css = theme_style_block("graphite", selector=".scope")
-    assert css.startswith("<style>.scope{") and "--p2h-accent:" in css
+    assert css.startswith("<style>.scope{") and "--bp-accent:" in css
     assert theme_style_block("light") != theme_style_block("graphite")
     with pytest.raises(KeyError):
         _ = FIELD_THEMES["not-a-theme"]
@@ -188,7 +188,7 @@ def test_gunmetal_field_theme_and_js_table():
     from bts_pivot.ui_fields import FIELD_THEMES, _ESM, theme_style_block
 
     assert set(FIELD_THEMES["gunmetal"]) == set(FIELD_THEMES["graphite"])
-    assert "--p2h-bg:#1f262d" in theme_style_block("gunmetal")
+    assert "--bp-bg:#1f262d" in theme_style_block("gunmetal")
     assert "gunmetal: {" in _ESM and '"#1f262d"' in _ESM
 
 
@@ -197,7 +197,7 @@ def test_gunmetal_field_theme_and_js_table():
 
 @pytest.fixture(scope="module")
 def fw_df():
-    return p2h.sample.firewall_logs(2000, seed=1)
+    return bp.sample.firewall_logs(2000, seed=1)
 
 
 def test_field_stats_glyph_only_for_numeric_and_datetime(prof, fw_df):
@@ -217,20 +217,20 @@ def test_field_stats_without_df_has_no_glyphs(prof):
 
 def test_field_stats_glyph_edge_cases():
     const_df = pd.DataFrame({"a": [5] * 100, "b": range(100)})
-    prof_c = p2h.profile(const_df)
+    prof_c = bp.profile(const_df)
     by = {f["name"]: f for f in field_stats(prof_c, const_df)}
     assert by["a"]["glyph"] is None  # no spread: nothing to draw
 
     tiny = pd.DataFrame({"a": [1, 2, 3]})
-    by_tiny = {f["name"]: f for f in field_stats(p2h.profile(tiny), tiny)}
+    by_tiny = {f["name"]: f for f in field_stats(bp.profile(tiny), tiny)}
     assert by_tiny["a"]["glyph"] is None  # too few points
 
     null_df = pd.DataFrame({"a": [None] * 50, "b": range(50)})
-    by_null = {f["name"]: f for f in field_stats(p2h.profile(null_df), null_df)}
+    by_null = {f["name"]: f for f in field_stats(bp.profile(null_df), null_df)}
     assert by_null["a"]["glyph"] is None
 
     single_time = pd.DataFrame({"t": [pd.Timestamp("2026-01-01")] * 50, "b": range(50)})
-    by_t = {f["name"]: f for f in field_stats(p2h.profile(single_time), single_time)}
+    by_t = {f["name"]: f for f in field_stats(bp.profile(single_time), single_time)}
     assert by_t["t"]["glyph"] is None  # one bucket only: not a trend worth drawing
 
 
@@ -247,7 +247,7 @@ def test_chip_html_renders_glyph_and_tolerates_missing_keys():
          "nulls": 0.0, "examples": "1, 2, 3", "ts": "", "glyph": [0.1, 0.5, 1.0], "glyph_kind": "hist"}
     h = chip_html(f)
     _xml_fragment(h)
-    assert "<svg" in h and "p2h-glyph" in h
+    assert "<svg" in h and "bp-glyph" in h
     no_glyph = {"name": "x", "kind": "categorical", "semantic": "", "count": 10, "distinct": 3, "variety": 0.3, "nulls": 0.0, "examples": "", "ts": ""}
     h2 = chip_html(no_glyph)  # no "glyph"/"glyph_kind" keys at all
     _xml_fragment(h2)

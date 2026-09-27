@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import bts_pivot as p2h
+import bts_pivot as bp
 from bts_pivot._hmm import HMMFit, choose_hmm_states, decode_regimes, fit_hmm
 
 rng = np.random.default_rng(1)
@@ -117,10 +117,10 @@ def test_decode_regimes_no_by_splits_single_sequence():
     assert set(counts.index) == {"regime 1", "regime 2"} and counts.sum() == 20
 
 
-def test_p2h_regimes_returns_view_and_toggles():
-    auth = p2h.sample.auth_logs(2000, seed=2)
-    v = p2h.regimes(auth, "event", by="user", time="timestamp", n_states=2, seed=0)
-    assert isinstance(v, p2h.View)
+def test_bp_regimes_returns_view_and_toggles():
+    auth = bp.sample.auth_logs(2000, seed=2)
+    v = bp.regimes(auth, "event", by="user", time="timestamp", n_states=2, seed=0)
+    assert isinstance(v, bp.View)
     assert v.layout.rows[0].column == "regime" and v.layout.measure == "count"
     t = v.pivot()
     assert t.shape[0] == 2
@@ -129,16 +129,16 @@ def test_p2h_regimes_returns_view_and_toggles():
     assert "<svg" in v.svg()
 
 
-def test_p2h_regimes_max_states_caps_columns():
-    auth = p2h.sample.auth_logs(1200, seed=3)
-    v = p2h.regimes(auth, "event", by="user", time="timestamp", n_states=2, seed=0, max_cols=2)
+def test_bp_regimes_max_states_caps_columns():
+    auth = bp.sample.auth_logs(1200, seed=3)
+    v = bp.regimes(auth, "event", by="user", time="timestamp", n_states=2, seed=0, max_cols=2)
     assert v.pivot().shape[1] <= 2
 
 
 def test_fit_hmm_performance_bound():
     import time
 
-    auth = p2h.sample.auth_logs(3000, seed=1)
+    auth = bp.sample.auth_logs(3000, seed=1)
     t0 = time.time()
     decode_regimes(auth, "event", by="user", time="timestamp", k_max=3, seed=0)
     assert time.time() - t0 < 15
