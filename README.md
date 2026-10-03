@@ -13,6 +13,10 @@ pip install "bts-pivot[cluster]"            # + scikit-learn for real HDBSCAN
 pip install "bts-pivot[mcp]"                # + an MCP server for LLM agents
 ```
 
+**Guided tour**: [examples/showcase.ipynb](examples/showcase.ipynb) runs the best
+features end to end on bundled sample data
+([open in Colab](https://colab.research.google.com/github/700799/pivot2hist/blob/main/examples/showcase.ipynb)).
+
 ```python
 import bts_pivot as bp
 
