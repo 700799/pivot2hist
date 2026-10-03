@@ -46,7 +46,7 @@ from ._sparkline import sparkline_table
 from ._spikes import BASELINES as SPIKE_BASELINES
 from ._novelty import KINDS as NOVELTY_KINDS
 
-__version__ = "0.20.0"
+__version__ = "0.21.0"
 
 _PLANNED_KEYS = ("memory_budget_mb", "mode", "columns", "query", "table", "sample_rows", "page_rows")
 
@@ -349,12 +349,17 @@ def prompt(
     return v.prompt(question, max_rows=table_max_rows, max_cols=table_max_cols, **prompt_kw)
 
 
-def explore(data: Any, **kw: Any) -> Any:
+def explore(data: Any = None, **kw: Any) -> Any:
     """Interactive Jupyter explorer (needs ``ipywidgets``): menus to alter, slice, best-fit,
-    reduce and cluster, with heatmap pivots and SVG histograms."""
+    reduce and cluster, with heatmap pivots and SVG histograms. ``data`` is a frame,
+    records, a View, or a file or folder path; leave it out for a start screen that
+    uploads files or a folder, opens a path, or loads a demo dataset."""
     from .ui import explore as _explore
 
     return _explore(data, **kw)
+
+
+explorer = explore
 
 
 def cluster(data: Any, columns: Optional[Sequence[str]] = None, k: Optional[int] = None, *, method: str = "kmeans", name: str = "cluster") -> pd.DataFrame:
@@ -447,7 +452,7 @@ def dependencies(data: Any, columns: Optional[Sequence[str]] = None, *, bins: in
 
 
 __all__ = [
-    "fit", "pivot", "histogram", "profile", "load", "suggest", "explore", "cluster", "chains", "regimes", "dependencies",
+    "fit", "pivot", "histogram", "profile", "load", "suggest", "explore", "explorer", "cluster", "chains", "regimes", "dependencies",
     "llm_context", "insights", "compare", "facet", "Comparison", "Facets", "METRICS", "METRIC_HELP", "ADDITIVE",
     "Explanation", "prompt", "Prompt", "DEFAULT_QUESTION", "sparkline_table", "spikes", "SPIKE_BASELINES", "novel", "NOVELTY_KINDS",
     "survey", "load_planned", "downcast", "stats", "verbose", "log", "distribution",

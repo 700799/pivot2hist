@@ -16,7 +16,7 @@ pip install "bts-pivot[mcp]"                # + an MCP server for LLM agents
 ```python
 import bts_pivot as bp
 
-v = bp.fit("firewall.csv")        # a DataFrame, path, list of dicts ... anything tabular
+v = bp.fit("firewall.csv")         # a DataFrame, path, list of dicts ... anything tabular
 v                                  # notebook: heatmap pivot, best fit for a 40 x 12 box
 v.toggle()                         # the same table as an SVG histogram; toggle() again returns
 v.slice(action="deny")             # slices stack, show in the title and survive toggling
@@ -25,12 +25,13 @@ v.suggest()                        # the auto-guess menu: alternative layouts, s
 v.cluster(4)                       # group similar rows with k-means
 v.coarser("src_ip")                # 10.0.1.5 -> 10.0.1.0/24 -> 10.0.0.0/16
 v.anomalies()                      # cells that break the row/column independence pattern
-bp.explore(df)                    # Jupyter menus: drag fields, pick a theme, all of the above
-bp.fit("huge.parquet")            # surveyed against your RAM; fitted on a sample, aggregated page by page
+bp.explore(df)                     # Jupyter menus: drag fields, pick a theme, all of the above
+bp.explore()                       # no data yet: a start screen to upload files or a folder
+bp.fit("huge.parquet")             # surveyed against your RAM; fitted on a sample, aggregated page by page
 bp.chains(df, "event", by="user", time="timestamp")   # Markov transition matrix as a pivot
 bp.regimes(df, "event", by="user", time="timestamp")  # HMM-decoded behavioural regimes, as a pivot
-bp.dependencies(df)               # which columns move together, as a pivot (mutual information)
-bp.verbose(); bp.stats(7)        # scrolling step log; the seven costliest steps
+bp.dependencies(df)                # which columns move together, as a pivot (mutual information)
+bp.verbose(); bp.stats(7)          # scrolling step log; the seven costliest steps
 v.llm_context()                    # description + metadata + a markdown table, sized for a model's context
 v.insights()                       # rich local summary: distributions, mixtures, anomalies, ranked findings — no LLM
 v.compare(action="deny")           # deny vs the rest on one shared layout: diverging heatmap, .top() movers, toggles too
@@ -839,7 +840,27 @@ Code tab shows it as `v.cell(...)` and Undo reverses it.
 
 ```python
 bp.explore(df)                                  # or v.explore(); files/DuckDB are surveyed and paged
+bp.explore("logs/")                             # a folder: every data file in it, as one table
+bp.explore()                                    # no data: upload files or a folder, type a path, or try a demo
 ```
+
+**Start screen.** `bp.explore()` with no data (`bp.explorer()` works too) opens a
+start screen: **Upload files…** or **Upload folder…** from your computer, the path of a
+file or folder on the machine the notebook runs on, or a demo dataset. Several files,
+or a folder (searched recursively, hidden files and non-data files skipped), open as
+one table with a `source_file` column naming each row's file. Uploads go up in 2 MB
+chunks, so big files don't hit a message-size limit, but a path is still faster for
+those. The explorer opens in the same output; **Choose other data** goes back, and the
+returned launcher holds the explorer as `launcher.explorer`. Reads csv, tsv, json,
+jsonl, parquet, xlsx and feather, also gzip/zip-compressed; never pickles, since
+unpickling a file can run arbitrary code.
+
+**Google Colab**: `!pip install "bts-pivot[jupyter]"` (accept if Colab offers to
+restart the session), then `import bts_pivot as bp; bp.explore()`. For big files,
+mount Drive (`from google.colab import drive; drive.mount('/content/drive')`) and
+type a `/content/drive/MyDrive/...` path instead of uploading. A plain
+`pip install bts-pivot` also runs there on Colab's built-in widgets, without the
+drag-and-drop fields, clickable cells or folder upload, which come with `[jupyter]`.
 
 An ipywidgets + anywidget app: Pivot / Histogram / Chains toggle, **Best fit**,
 **Suggest** (ranked alternatives with their score in a dropdown), Undo/Reset, and tabs

@@ -1756,13 +1756,24 @@ class Explorer:
         display(self.box)
 
 
-def explore(data: Any, **fit_kwargs: Any) -> Explorer:
-    """Open the interactive explorer on a frame/path/records or an existing :class:`View`."""
+def explore(data: Any = None, **fit_kwargs: Any) -> Any:
+    """Open the interactive explorer on a frame, records, an existing :class:`View`, or the
+    path of a file or folder (a folder's data files open as one table with a
+    ``source_file`` column).
+
+    With no ``data`` it opens a start screen instead: upload files or a folder, type a
+    path, or try a demo dataset; the explorer then opens in the same output and the
+    returned :class:`~bts_pivot.ui_launch.Launcher` holds it as ``.explorer``."""
     from . import fit as _fit  # package-level fit: surveys files/DuckDB and pages big sources
+    from .ui_launch import Launcher, resolve_source
 
     ui_kw = {k: fit_kwargs.pop(k) for k in ("width", "height", "max_slicers") if k in fit_kwargs}
-    view = data if isinstance(data, View) else _fit(data, **fit_kwargs)
-    return Explorer(view, **ui_kw)
+
+    def open_(source: Any) -> Explorer:
+        view = source if isinstance(source, View) else _fit(resolve_source(source), **fit_kwargs)
+        return Explorer(view, **ui_kw)
+
+    return Launcher(open_) if data is None else open_(data)
 
 
 __all__ = ["Explorer", "explore"]
